@@ -246,6 +246,79 @@ class CaseIndex:
         logger.info(f"Indexed {len(all_chunks)} chunks successfully.")
         return len(all_chunks)
 
+    def reindex_descriptions(self, case: BankruptcyCase) -> int:
+        """Re-index only docket entry descriptions, preserving document chunks.
+
+        Deletes all existing description chunks (source="docket_entry") and
+        re-embeds current descriptions. Much faster than full re-indexing since
+        document chunks are left untouched.
+
+        Args:
+            case: The BankruptcyCase with updated descriptions.
+
+        Returns:
+            Number of description chunks indexed.
+        """
+        try:
+            collection = self.client.get_collection(self.collection_name)
+        except Exception:
+            logger.warning("No existing index found — falling back to full index_case()")
+            return self.index_case(case)
+
+        # Delete all existing description chunks
+        existing = collection.get(where={"source": "docket_entry"})
+        if existing and existing["ids"]:
+            collection.delete(ids=existing["ids"])
+            logger.info(f"Deleted {len(existing['ids'])} old description chunks")
+
+        # Re-index descriptions (same logic as index_case lines 199-221)
+        all_chunks = []
+        all_metadatas = []
+        all_ids = []
+
+        entry_count = 0
+        for entry in case.entries:
+            if not entry.description or not entry.description.strip():
+                continue
+            entry_count += 1
+            doc_type = classify_document(entry.description)
+            chunk_id = f"d{case.docket_id}_entry{entry.id}_desc"
+            metadata = {
+                "docket_entry_id": entry.id,
+                "entry_number": entry.entry_number or 0,
+                "ecf_number": f"ECF No. {entry.entry_number}" if entry.entry_number else "Unnumbered",
+                "description": entry.description[:500],
+                "doc_type": doc_type.value,
+                "date_filed": entry.date_filed or "",
+                "chunk_index": 0,
+                "total_chunks": 1,
+                "doc_id": 0,
+                "source": "docket_entry",
+            }
+            all_chunks.append(entry.description)
+            all_metadatas.append(metadata)
+            all_ids.append(chunk_id)
+
+        if not all_chunks:
+            logger.warning("No descriptions to index")
+            return 0
+
+        logger.info(f"Re-indexing {entry_count} docket entry descriptions...")
+        embeddings = embed_texts(all_chunks, is_query=False)
+
+        batch_size = 5000
+        for i in range(0, len(all_chunks), batch_size):
+            end = min(i + batch_size, len(all_chunks))
+            collection.add(
+                ids=all_ids[i:end],
+                embeddings=embeddings[i:end],
+                documents=all_chunks[i:end],
+                metadatas=all_metadatas[i:end],
+            )
+
+        logger.info(f"Re-indexed {len(all_chunks)} description chunks")
+        return len(all_chunks)
+
     def _build_where_filter(
         self,
         doc_type_filter: Optional[str] = None,

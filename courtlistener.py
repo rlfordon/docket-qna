@@ -8,7 +8,8 @@ import json
 import time
 import logging
 from dataclasses import dataclass, field, asdict
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Optional, Callable
 
 import requests
 
@@ -60,12 +61,61 @@ class BankruptcyCase:
     entries: list[DocketEntry] = field(default_factory=list)
     total_entry_count: int = 0
     available_doc_count: int = 0
+    last_updated: Optional[str] = None
 
     @property
     def coverage_pct(self) -> float:
         if self.total_entry_count == 0:
             return 0.0
         return (self.available_doc_count / self.total_entry_count) * 100
+
+
+DESCRIPTION_QUALITY_THRESHOLD = 50  # chars — descriptions shorter are "stubs"
+
+
+def get_poor_description_date_range(case: BankruptcyCase) -> tuple[Optional[str], Optional[str]]:
+    """Get the date range spanning entries with stub or empty descriptions.
+
+    Returns:
+        (date_start, date_end) as ISO date strings, or (None, None) if no
+        poor-quality entries have dates (falls back to full docket purchase).
+    """
+    dates = []
+    for entry in case.entries:
+        desc = (entry.description or "").strip()
+        if not desc or len(desc) < DESCRIPTION_QUALITY_THRESHOLD:
+            if entry.date_filed:
+                dates.append(entry.date_filed)
+    if not dates:
+        return None, None
+    return min(dates), max(dates)
+
+
+def description_quality_stats(case: BankruptcyCase) -> dict:
+    """Analyze the quality of docket entry descriptions.
+
+    Returns:
+        Dict with keys: total, detailed, stub, empty, detailed_pct
+    """
+    total = len(case.entries)
+    empty = 0
+    stub = 0
+    detailed = 0
+    for entry in case.entries:
+        desc = (entry.description or "").strip()
+        if not desc:
+            empty += 1
+        elif len(desc) < DESCRIPTION_QUALITY_THRESHOLD:
+            stub += 1
+        else:
+            detailed += 1
+    return {
+        "total": total,
+        "detailed": detailed,
+        "stub": stub,
+        "empty": empty,
+        "detailed_pct": (detailed / total * 100) if total > 0 else 0.0,
+    }
 
 
 class CourtListenerClient:
@@ -282,6 +332,7 @@ class CourtListenerClient:
                     doc.date_filed = entry.date_filed
 
         case.available_doc_count = len(raw_docs)
+        case.last_updated = datetime.now(timezone.utc).isoformat()
         logger.info(
             f"  Case loaded: {case.case_name} | "
             f"{case.available_doc_count}/{case.total_entry_count} docs available "
@@ -291,26 +342,41 @@ class CourtListenerClient:
 
     # --- PACER Purchase (optional) ---
 
-    def purchase_docket(self, docket_id: int) -> dict:
-        """Request purchase of a full docket sheet from PACER via CourtListener.
+    def purchase_docket(
+        self,
+        case: BankruptcyCase,
+        date_start: Optional[str] = None,
+        date_end: Optional[str] = None,
+    ) -> dict:
+        """Request purchase of a docket sheet from PACER via CourtListener.
 
         Requires PACER credentials. The purchase is async — returns a request ID
         that can be polled for completion.
+
+        Args:
+            case: The BankruptcyCase to purchase the docket for.
+            date_start: Optional start date (inclusive) to scope the purchase.
+            date_end: Optional end date (inclusive) to scope the purchase.
         """
-        url = f"{config.CL_V4_BASE_URL}/recap/"
+        url = f"{config.CL_V4_BASE_URL}/recap-fetch/"
         payload = {
-            "docket": docket_id,
             "request_type": 1,  # Docket
+            "docket_number": case.docket_number,
+            "court": case.court,
             "pacer_username": config.PACER_USERNAME,
             "pacer_password": config.PACER_PASSWORD,
         }
+        if date_start:
+            payload["date_start"] = date_start
+        if date_end:
+            payload["date_end"] = date_end
         resp = self.session.post(url, json=payload)
         resp.raise_for_status()
         return resp.json()
 
     def purchase_document(self, recap_document_id: int) -> dict:
         """Request purchase of a specific document from PACER via CourtListener."""
-        url = f"{config.CL_V4_BASE_URL}/recap/"
+        url = f"{config.CL_V4_BASE_URL}/recap-fetch/"
         payload = {
             "recap_document": recap_document_id,
             "request_type": 2,  # PDF
@@ -320,6 +386,133 @@ class CourtListenerClient:
         resp = self.session.post(url, json=payload)
         resp.raise_for_status()
         return resp.json()
+
+    def poll_purchase_status(
+        self,
+        request_id: int,
+        poll_interval: int = None,
+        timeout: int = None,
+        progress_callback: Optional[Callable] = None,
+    ) -> dict:
+        """Poll a recap-fetch request until completion or timeout.
+
+        Args:
+            request_id: The ID from a purchase_docket/purchase_document response.
+            poll_interval: Seconds between polls (default from config).
+            timeout: Max seconds to wait (default from config).
+            progress_callback: Optional callback(status: int, elapsed: float).
+
+        Returns:
+            The final response dict on success.
+
+        Raises:
+            TimeoutError: If polling exceeds timeout.
+            RuntimeError: If the request fails (status 3/6/7).
+        """
+        poll_interval = poll_interval or config.PACER_POLL_INTERVAL
+        timeout = timeout or config.PACER_POLL_TIMEOUT
+        url = f"{config.CL_V4_BASE_URL}/recap-fetch/{request_id}/"
+        start = time.time()
+
+        # Status codes from CourtListener ProcessingQueue model
+        terminal_failures = {3, 6, 7}
+        status_labels = {
+            1: "Enqueued",
+            2: "Complete",
+            3: "Failed",
+            4: "In Progress",
+            5: "Queued for Retry",
+            6: "Invalid Content",
+            7: "Needs Info",
+        }
+
+        while True:
+            elapsed = time.time() - start
+            if elapsed > timeout:
+                raise TimeoutError(
+                    f"PACER purchase polling timed out after {timeout}s"
+                )
+
+            data = self._get(url)
+            status = data.get("status")
+
+            if progress_callback:
+                progress_callback(status, elapsed)
+
+            if status == 2:
+                logger.info("PACER purchase completed successfully")
+                return data
+
+            if status in terminal_failures:
+                label = status_labels.get(status, f"Unknown status {status}")
+                msg = data.get("message", "")
+                raise RuntimeError(
+                    f"PACER purchase failed: {label}. {msg}".strip()
+                )
+
+            logger.info(
+                f"  Purchase status: {status_labels.get(status, status)} "
+                f"({elapsed:.0f}s elapsed)"
+            )
+            time.sleep(poll_interval)
+
+    def refresh_docket_entries(self, case: BankruptcyCase) -> int:
+        """Re-fetch docket entries from API and merge with existing case data.
+
+        Preserves existing document lists on entries. Only upgrades descriptions
+        when the new description is longer than the existing one.
+
+        Args:
+            case: The BankruptcyCase to refresh.
+
+        Returns:
+            Number of entries whose descriptions were updated.
+        """
+        logger.info(f"Refreshing docket entries for case {case.docket_id}...")
+        raw_entries = self.get_docket_entries(case.docket_id)
+        logger.info(f"  Fetched {len(raw_entries)} entries from API")
+
+        # Build lookup of existing entries by ID
+        existing_map = {entry.id: entry for entry in case.entries}
+
+        updated_count = 0
+        new_entries = []
+
+        for raw in raw_entries:
+            entry_id = raw["id"]
+            new_desc = raw.get("description", "")
+
+            if entry_id in existing_map:
+                existing = existing_map[entry_id]
+                # Only upgrade description if new one is longer
+                if len(new_desc) > len(existing.description or ""):
+                    existing.description = new_desc
+                    updated_count += 1
+                # Update other fields that may have changed
+                if raw.get("date_filed"):
+                    existing.date_filed = raw["date_filed"]
+                if raw.get("entry_number") is not None:
+                    existing.entry_number = raw["entry_number"]
+            else:
+                # New entry not in our cache
+                new_entry = DocketEntry(
+                    id=entry_id,
+                    entry_number=raw.get("entry_number"),
+                    description=new_desc,
+                    date_filed=raw.get("date_filed"),
+                )
+                new_entries.append(new_entry)
+                updated_count += 1
+
+        if new_entries:
+            case.entries.extend(new_entries)
+            logger.info(f"  Added {len(new_entries)} new entries")
+
+        case.total_entry_count = len(case.entries)
+        case.last_updated = datetime.now(timezone.utc).isoformat()
+
+        logger.info(f"  Updated {updated_count} entry descriptions")
+        return updated_count
 
 
 # --- Case Caching ---

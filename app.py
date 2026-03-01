@@ -11,7 +11,8 @@ import streamlit as st
 import config
 from courtlistener import (
     CourtListenerClient, parse_courtlistener_url, BankruptcyCase,
-    save_case, load_cached_case, list_cached_cases,
+    save_case, load_cached_case, list_cached_cases, description_quality_stats,
+    get_poor_description_date_range,
 )
 from classifier import classify_document, DocType, get_type_summary
 from indexer import CaseIndex
@@ -34,6 +35,10 @@ if "index" not in st.session_state:
     st.session_state.index = None
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "show_pacer_confirm" not in st.session_state:
+    st.session_state.show_pacer_confirm = False
+if "pacer_date_range" not in st.session_state:
+    st.session_state.pacer_date_range = (None, None)
 
 
 def main():
@@ -96,6 +101,60 @@ def _load_from_cache(docket_id: int):
         st.session_state.index = CaseIndex(docket_id)
         st.session_state.messages = []
         st.rerun()
+
+
+def _execute_pacer_update(case: BankruptcyCase):
+    """Purchase updated docket from PACER, refresh entries, and re-index descriptions."""
+    client = CourtListenerClient()
+    index: CaseIndex = st.session_state.index
+    date_start, date_end = st.session_state.pacer_date_range
+
+    try:
+        # 1. Submit purchase
+        with st.spinner("Submitting docket purchase to PACER..."):
+            result = client.purchase_docket(case, date_start=date_start, date_end=date_end)
+            request_id = result.get("id")
+            if not request_id:
+                st.error("No request ID returned from PACER purchase.")
+                return
+
+        # 2. Poll for completion
+        status_placeholder = st.empty()
+        with st.spinner("Waiting for PACER to process the request..."):
+            def _progress(status, elapsed):
+                labels = {1: "Enqueued", 2: "Complete", 3: "Failed", 4: "In Progress", 5: "Queued for Retry", 6: "Invalid Content", 7: "Needs Info"}
+                label = labels.get(status, f"Status {status}")
+                status_placeholder.caption(f"PACER status: {label} ({elapsed:.0f}s)")
+
+            client.poll_purchase_status(request_id, progress_callback=_progress)
+        status_placeholder.empty()
+
+        # 3. Refresh docket entries
+        with st.spinner("Refreshing docket entries from CourtListener..."):
+            updated_count = client.refresh_docket_entries(case)
+
+        # 4. Save updated case
+        save_case(case)
+
+        # 5. Re-index descriptions if case is indexed
+        reindexed = 0
+        if index and index.exists():
+            with st.spinner("Re-indexing descriptions..."):
+                reindexed = index.reindex_descriptions(case)
+
+        st.success(
+            f"PACER update complete! Updated {updated_count} entry descriptions."
+            + (f" Re-indexed {reindexed} description chunks." if reindexed else "")
+        )
+        st.rerun()
+
+    except TimeoutError:
+        st.error("PACER purchase timed out. The request may still complete — try refreshing later.")
+    except RuntimeError as e:
+        st.error(f"PACER purchase failed: {e}")
+    except Exception as e:
+        st.error(f"Error during PACER update: {e}")
+        logger.exception("PACER update failed")
 
 
 def _render_case_loader():
@@ -180,6 +239,60 @@ def _render_case_dashboard():
     with st.expander("Filing Types Breakdown"):
         for doc_type_label, count in type_summary.items():
             st.write(f"**{doc_type_label}:** {count}")
+
+    # --- Description Quality Stats ---
+    st.subheader("Description Quality")
+    stats = description_quality_stats(case)
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Detailed Descriptions", stats["detailed"])
+    col2.metric("Stub/Minimal", stats["stub"])
+    col3.metric("Empty", stats["empty"])
+    col4.metric("Quality", f"{stats['detailed_pct']:.0f}%")
+    if case.last_updated:
+        st.caption(f"Last updated: {case.last_updated}")
+
+    # --- PACER Docket Update ---
+    if config.has_pacer_credentials():
+        improvable = stats["stub"] + stats["empty"]
+        if improvable > 0:
+            st.info(
+                f"{improvable} entries have minimal or empty descriptions. "
+                "Updating the docket from PACER can improve search quality."
+            )
+        if st.session_state.show_pacer_confirm:
+            date_start, date_end = st.session_state.pacer_date_range
+            if date_start and date_end:
+                scope_msg = (
+                    f"Purchase will be scoped to entries filed "
+                    f"**{date_start}** to **{date_end}** "
+                    f"({improvable} entries with poor descriptions)."
+                )
+            else:
+                scope_msg = (
+                    f"Date range could not be determined — "
+                    f"purchasing the **full docket** ({improvable} entries "
+                    f"with poor descriptions)."
+                )
+            st.warning(
+                f"{scope_msg}\n\n"
+                "**PACER costs:** Docket sheets are billed at ~$0.10/page. "
+                "Large cases may cost $5-$20+. Charges are non-refundable."
+            )
+            col_yes, col_no = st.columns(2)
+            with col_yes:
+                if st.button("Confirm Purchase", type="primary", use_container_width=True):
+                    st.session_state.show_pacer_confirm = False
+                    _execute_pacer_update(case)
+            with col_no:
+                if st.button("Cancel", use_container_width=True):
+                    st.session_state.show_pacer_confirm = False
+                    st.session_state.pacer_date_range = (None, None)
+                    st.rerun()
+        else:
+            if st.button("Update Docket from PACER", use_container_width=True):
+                st.session_state.pacer_date_range = get_poor_description_date_range(case)
+                st.session_state.show_pacer_confirm = True
+                st.rerun()
 
     # --- Indexing ---
     st.subheader("Index & Search")

@@ -14,6 +14,10 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 PACER_USERNAME = os.getenv("PACER_USERNAME", "")
 PACER_PASSWORD = os.getenv("PACER_PASSWORD", "")
 
+# --- PACER Polling ---
+PACER_POLL_INTERVAL = int(os.getenv("PACER_POLL_INTERVAL", "3"))  # seconds
+PACER_POLL_TIMEOUT = int(os.getenv("PACER_POLL_TIMEOUT", "120"))  # seconds
+
 # --- Provider Settings ---
 EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "flp")  # "flp" or "openai"
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")  # "anthropic" or "openai"
@@ -78,3 +82,8 @@ def validate_config():
         errors.append("OPENAI_API_KEY is not set (required when EMBEDDING_PROVIDER=openai)")
 
     return errors
+
+
+def has_pacer_credentials() -> bool:
+    """Check if PACER credentials are configured."""
+    return bool(PACER_USERNAME and PACER_PASSWORD)
