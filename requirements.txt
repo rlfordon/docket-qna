@@ -1,0 +1,20 @@
+# Core
+requests>=2.31
+python-dotenv>=1.0
+
+# Vector store
+chromadb>=0.5
+
+# Embeddings (FLP model)
+sentence-transformers>=3.0
+torch>=2.0
+
+# LLM clients
+anthropic>=0.40
+openai>=1.50
+
+# UI
+streamlit>=1.38
+
+# Optional: for PACER document handling
+# pypdf>=4.0
