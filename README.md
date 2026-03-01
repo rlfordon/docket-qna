@@ -17,55 +17,67 @@ This tool fills the gap: **free, open-source, per-case AI document intelligence*
 ## How It Works
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    User Interface                        │
-│         (Streamlit app — browser-based)                  │
-│                                                          │
-│  ┌─────────────┐  ┌──────────────┐  ┌────────────────┐  │
-│  │ Case Loader  │  │ Case Dashboard│  │  Q&A Chat      │  │
-│  │             │  │              │  │               │  │
-│  │ Enter case  │  │ Coverage map │  │ Ask questions │  │
-│  │ number/URL  │  │ Doc types    │  │ Get cited     │  │
-│  │             │  │ Filing stats │  │ answers       │  │
-│  └──────┬──────┘  └──────┬───────┘  └───────┬───────┘  │
-└─────────┼────────────────┼──────────────────┼──────────┘
-          │                │                  │
-          ▼                ▼                  ▼
-┌─────────────────────────────────────────────────────────┐
-│                   Core Pipeline                          │
-│                                                          │
-│  1. FETCH         2. CLASSIFY       3. INDEX             │
-│  CourtListener ──► Regex-based  ──► Chunk documents      │
-│  API: docket,     document type    Embed with FLP's      │
-│  entries, docs    classification   ModernBERT model      │
-│                                    Store in ChromaDB     │
-│                                                          │
-│  4. QUERY                                                │
-│  User question ──► Retrieve relevant chunks ──► LLM      │
-│  (optional type    from vector DB              generates  │
-│   filter)                                      answer     │
-│                                                w/ ECF     │
-│                                                citations  │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                      User Interface                          │
+│           (Streamlit app — browser-based)                     │
+│                                                              │
+│  ┌──────────────┐  ┌───────────────┐  ┌──────────────────┐  │
+│  │ Case Loader   │  │ Case Dashboard │  │  Q&A Chat        │  │
+│  │              │  │               │  │                  │  │
+│  │ Enter case   │  │ Coverage map  │  │ Ask questions    │  │
+│  │ number/URL   │  │ Doc types     │  │ Get cited        │  │
+│  │ Recent cases │  │ Filing stats  │  │ answers          │  │
+│  └──────┬───────┘  └──────┬────────┘  └────────┬─────────┘  │
+└─────────┼─────────────────┼─────────────────────┼────────────┘
+          │                 │                     │
+          ▼                 ▼                     ▼
+┌──────────────────────────────────────────────────────────────┐
+│                     Core Pipeline                            │
+│                                                              │
+│  1. FETCH          2. CLASSIFY        3. INDEX               │
+│  CourtListener ──► Regex-based   ──► Chunk documents         │
+│  API: docket,      document type     Embed with FLP's        │
+│  entries, docs     classification    ModernBERT model         │
+│  + case caching                      Store in ChromaDB       │
+│                                      Tag source: document    │
+│                                        vs docket_entry       │
+│                                                              │
+│  4. QUERY (smart routing)                                    │
+│  User question ──► Classify intent ──► Route to strategy:    │
+│                                                              │
+│  ┌─ Structured listing ── date/type filter over case.entries │
+│  │  "What motions were filed last month?"                    │
+│  │                                                           │
+│  ├─ Two-stage retrieval ── descriptions → document chunks    │
+│  │  "What hearings have occurred?"                           │
+│  │  "What do the objections to the plan argue?"              │
+│  │   Stage 1: semantic search over all docket descriptions   │
+│  │   Stage 2: pull doc chunks from matched entries           │
+│  │                                                           │
+│  └─ Pure semantic search ── analytical questions             │
+│     "What are the key terms of the DIP facility?"            │
+│                                                              │
+│  All strategies ──► LLM generates answer w/ ECF citations    │
+└──────────────────────────────────────────────────────────────┘
           │
           ▼
-┌─────────────────────────────────────────────────────────┐
-│                  External Services                       │
-│                                                          │
-│  CourtListener API ─── Free, requires API token          │
-│  (dockets, entries,    https://www.courtlistener.com/    │
-│   documents, text)                                       │
-│                                                          │
-│  FLP ModernBERT ────── Free, runs locally                │
-│  Embedding Model       Free-Law-Project/                 │
-│                        modernbert-embed-base_finetune_512│
-│                                                          │
-│  LLM (BYOK) ────────── User provides own API key         │
-│  OpenAI / Anthropic    For Q&A generation only           │
-│                                                          │
-│  PACER (optional) ──── User's own credentials            │
-│                        For purchasing missing docs        │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                    External Services                         │
+│                                                              │
+│  CourtListener API ─── Free, requires API token              │
+│  (dockets, entries,    https://www.courtlistener.com/        │
+│   documents, text)                                           │
+│                                                              │
+│  FLP ModernBERT ────── Free, runs locally                    │
+│  Embedding Model       Free-Law-Project/                     │
+│                        modernbert-embed-base_finetune_512    │
+│                                                              │
+│  LLM (BYOK) ────────── User provides own API key             │
+│  OpenAI / Anthropic    For Q&A generation only               │
+│                                                              │
+│  PACER (optional) ──── User's own credentials                │
+│                        For purchasing missing docs            │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ## Key Features
@@ -81,8 +93,10 @@ This tool fills the gap: **free, open-source, per-case AI document intelligence*
 - Categories: Motions, Objections, Orders, Plans/Disclosure Statements, Proofs of Claim, Fee Applications, Schedules/Statements, Monthly Operating Reports, Notices, Other
 - Enables filtered queries ("show me only objections to the plan")
 
-### Natural Language Q&A (RAG)
-- Ask questions across all indexed documents in the case
+### Smart Query Routing
+- **Question classifier** detects intent and routes to the right retrieval strategy
+- **Structured listings** for date-range and doc-type questions — pulls directly from docket entries, no embedding search needed
+- **Two-stage retrieval** for keyword and analytical questions — searches docket descriptions first (full docket coverage), then pulls relevant document chunks for depth
 - Answers cite specific ECF docket entry numbers
 - Supports structured output requests ("make me a table of...")
 - Flags when document coverage is incomplete for a given question
@@ -140,10 +154,15 @@ Ambiguous entries fall through to "other." Future enhancement: LLM-based classif
 
 ### Indexing Pipeline (`indexer.py`)
 
+**Two content pools are indexed separately:**
+- **Document chunks** — full text from available documents, tagged `source: "document"`
+- **Docket entry descriptions** — short descriptions for every entry on the docket, tagged `source: "docket_entry"`
+
+This separation enables two-stage retrieval: search descriptions for breadth (full docket coverage), then pull document chunks for depth.
+
 **Chunking strategy:**
-1. Short documents (< 512 tokens): Keep as single chunk, preserving full context
-2. Medium documents (512-2048 tokens): Split into ~512-token chunks with 50-token overlap
-3. Long documents (> 2048 tokens): Split into ~512-token chunks with 50-token overlap, with section-aware splitting where possible
+- Documents are split into ~512-token chunks with 50-token overlap
+- Short documents (< 512 tokens) are kept as a single chunk
 
 **Each chunk stores metadata:**
 ```python
@@ -153,7 +172,7 @@ Ambiguous entries fall through to "other." Future enhancement: LLM-based classif
     "description": "Motion to Approve Disclosure Statement",
     "doc_type": "motion",
     "date_filed": "2024-03-15",
-    "filed_by": "Debtor",  # if extractable from entry
+    "source": "document",        # or "docket_entry"
     "chunk_index": 0,
     "total_chunks": 3,
 }
@@ -175,18 +194,39 @@ Ambiguous entries fall through to "other." Future enhancement: LLM-based classif
 ```
 User question
     │
-    ├──► (Optional) Filter by doc_type metadata
+    ├──► Classify intent (regex-based)
+    │    → category, doc_type, date_range, keywords
     │
-    ├──► Embed question using same model
+    ├──► Route to retrieval strategy:
     │
-    ├──► Retrieve top-k chunks from ChromaDB (k=10-15)
+    │    Structured listing (date/type/combined)?
+    │    └──► Filter case.entries directly → format for LLM
+    │
+    │    Keyword listing or analytical?
+    │    ├──► Stage 1: Search docket descriptions (full docket)
+    │    │    → find relevant entry IDs
+    │    ├──► Stage 2: Search doc chunks scoped to those entries
+    │    │    → get deep content
+    │    ├──► Fallback: unscoped doc search if stage 2 is thin
+    │    └──► Combine descriptions + doc chunks, deduplicate
     │
     ├──► Assemble context with chunk metadata
     │
     ├──► Send to LLM with system prompt + context + question
     │
-    └──► Return answer with ECF citations
+    └──► Return answer with ECF citations + sources
 ```
+
+**Question categories:**
+
+| Category | Example | Strategy |
+|---|---|---|
+| `docket_listing` | "List all filings from the past two weeks" | Filter entries by date |
+| `type_listing` | "What motions have been filed?" | Filter entries by doc type |
+| `type_date_listing` | "What orders were entered last month?" | Filter by both |
+| `keyword_listing` | "What hearings have occurred?" | Two-stage semantic search |
+| `type_analysis` | "What do the objections argue?" | Two-stage, filtered by doc type |
+| `analytical` | "What are the terms of the DIP facility?" | Two-stage, unfiltered |
 
 **LLM options (BYOK):**
 - Anthropic Claude (Haiku for cost efficiency, Sonnet for quality)
@@ -212,8 +252,8 @@ The system prompt is critical for answer quality. Key instructions:
 
 ### Install
 ```bash
-git clone https://github.com/[you]/recap-bankruptcy-ai.git
-cd recap-bankruptcy-ai
+git clone https://github.com/rlfordon/docket-qna.git
+cd docket-qna
 pip install -r requirements.txt
 ```
 
@@ -276,26 +316,33 @@ A power user could index a large case and ask 50 questions for well under $1.
 ## Project Structure
 
 ```
-recap-bankruptcy-ai/
+docket-qna/
 ├── README.md              # This file
+├── CLAUDE.md              # AI assistant instructions
 ├── requirements.txt       # Python dependencies
 ├── .env.example           # Environment variable template
 ├── config.py              # Configuration & API key management
 ├── courtlistener.py       # CourtListener API client
 ├── classifier.py          # Bankruptcy document type classification
 ├── indexer.py             # Chunking, embedding, vector store
-├── query.py               # RAG retrieval + LLM Q&A
+├── query.py               # Question classifier + RAG retrieval + LLM Q&A
 ├── app.py                 # Streamlit UI
 ├── prompts/
 │   └── system_prompt.txt  # LLM system prompt for Q&A
-└── data/                  # Local ChromaDB storage (gitignored)
+├── tests/
+│   ├── test_question_classifier.py  # 84-case classifier test suite
+│   ├── test_llm_classifier.py       # LLM vs regex classifier comparison
+│   └── questions_from_users.md      # Running log of real user questions
+└── data/                  # Local storage (gitignored)
+    ├── chroma/            # ChromaDB vector store
+    └── cases/             # Cached case data (JSON)
 ```
 
 ## Contributing
 
 This is an open-source proof of concept. Contributions welcome:
 
-- **Better classification:** LLM-based document type classification for ambiguous entries
+- **PACER document purchase flow:** Offer to buy missing documents when the system identifies a gap, index them incrementally, and re-query
 - **Claims register parsing:** Structured extraction from proofs of claim
 - **Timeline generation:** Automatic case timeline from key docket events
 - **Multi-case support:** Compare filings across related cases

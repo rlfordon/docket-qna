@@ -20,10 +20,10 @@ RAG pipeline: **Fetch → Classify → Index → Query**
 
 - **courtlistener.py** — API client for CourtListener REST API (v3/v4). Dataclasses: `RecapDocument`, `DocketEntry`, `BankruptcyCase`. Handles pagination, rate limiting (5000 req/hr), and optional PACER purchases.
 - **classifier.py** — Regex-based document type classification into `DocType` enum (11 types: Motion, Objection, Order, Plan, Claim, etc.). Pattern matching is ordered most-specific-first.
-- **indexer.py** — Chunks documents (512-token target, 50-token overlap), embeds via FLP ModernBERT (default, free, local) or OpenAI, stores in ChromaDB. `CaseIndex` class manages the vector store lifecycle. FLP model uses `search_document:` / `search_query:` prefixes.
-- **query.py** — RAG orchestration: retrieves top-k chunks from ChromaDB, formats context with metadata, calls LLM (Anthropic Claude or OpenAI GPT), returns answer with source tracking.
+- **indexer.py** — Chunks documents (512-token target, 50-token overlap), embeds via FLP ModernBERT (default, free, local) or OpenAI, stores in ChromaDB. `CaseIndex` class manages the vector store lifecycle. Two content pools: document chunks (`source: "document"`) and docket entry descriptions (`source: "docket_entry"`). Methods: `query()`, `query_descriptions()`, `query_documents()`. FLP model uses `search_document:` / `search_query:` prefixes.
+- **query.py** — Question intent classification (`classify_question()` → `QuestionIntent`) and smart retrieval routing. Structured listings for date/type queries; two-stage retrieval (descriptions → document chunks) for keyword and analytical queries. Calls LLM (Anthropic Claude or OpenAI GPT), returns answer with source tracking.
 - **config.py** — All configuration via environment variables with `python-dotenv`. Provider selection for embeddings and LLM.
-- **app.py** — Streamlit UI with session state for case data, index, and chat history.
+- **app.py** — Streamlit UI with session state for case data, index, and chat history. Case caching to `data/cases/`.
 - **prompts/system_prompt.txt** — LLM system prompt enforcing citation of ECF numbers, bankruptcy terminology, and grounded-only answers.
 
 ## Key Patterns
@@ -31,7 +31,7 @@ RAG pipeline: **Fetch → Classify → Index → Query**
 - Domain models are Python `dataclass`es (not Pydantic)
 - FLP embedding model is lazily loaded as a module-level global (`_flp_model`)
 - ChromaDB is file-based (stored in `data/chroma/`, gitignored)
-- Chunk metadata includes `docket_entry_id`, `ecf_number`, `description`, `doc_type`, `date_filed`, `chunk_index`
+- Chunk metadata includes `docket_entry_id`, `ecf_number`, `description`, `doc_type`, `date_filed`, `chunk_index`, `source`
 - All answers must cite ECF docket entry numbers per the system prompt
 - Embedding batching for both ChromaDB inserts and API calls
 
