@@ -340,13 +340,7 @@ docket-qna/
 
 ## Contributing
 
-This is an open-source proof of concept. Contributions welcome:
-
-- **PACER document purchase flow:** Offer to buy missing documents when the system identifies a gap, index them incrementally, and re-query
-- **Claims register parsing:** Structured extraction from proofs of claim
-- **Timeline generation:** Automatic case timeline from key docket events
-- **Multi-case support:** Compare filings across related cases
-- **Export:** Generate case summary reports as PDF/DOCX
+This is an open-source proof of concept. Contributions welcome — see [ROADMAP.md](ROADMAP.md) for planned features and priorities.
 
 ## Acknowledgments
 
