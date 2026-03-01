@@ -14,7 +14,7 @@ import chromadb
 
 import config
 from classifier import classify_document
-from courtlistener import BankruptcyCase, RecapDocument
+from courtlistener import BankruptcyCase, DocketEntry, RecapDocument
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +57,15 @@ def embed_texts(texts: list[str], is_query: bool = False) -> list[list[float]]:
 
         client = openai.OpenAI(api_key=config.OPENAI_API_KEY)
         # OpenAI handles batches up to 2048
+        import time as _time
+
+        import time as _time
+
         all_embeddings = []
-        batch_size = 512
+        batch_size = 128
         for i in range(0, len(texts), batch_size):
+            if i > 0:
+                _time.sleep(1)
             batch = texts[i : i + batch_size]
             resp = client.embeddings.create(
                 model=config.OPENAI_EMBEDDING_MODEL, input=batch
@@ -184,17 +190,43 @@ class CaseIndex:
                         "chunk_index": i,
                         "total_chunks": len(chunks),
                         "doc_id": doc.id,
+                        "source": "document",
                     }
                     all_chunks.append(chunk_text_str)
                     all_metadatas.append(metadata)
                     all_ids.append(chunk_id)
 
+        # Index docket entry descriptions
+        entry_count = 0
+        for entry in case.entries:
+            if not entry.description or not entry.description.strip():
+                continue
+            entry_count += 1
+            doc_type = classify_document(entry.description)
+            chunk_id = f"d{case.docket_id}_entry{entry.id}_desc"
+            metadata = {
+                "docket_entry_id": entry.id,
+                "entry_number": entry.entry_number or 0,
+                "ecf_number": f"ECF No. {entry.entry_number}" if entry.entry_number else "Unnumbered",
+                "description": entry.description[:500],
+                "doc_type": doc_type.value,
+                "date_filed": entry.date_filed or "",
+                "chunk_index": 0,
+                "total_chunks": 1,
+                "doc_id": 0,
+                "source": "docket_entry",
+            }
+            all_chunks.append(entry.description)
+            all_metadatas.append(metadata)
+            all_ids.append(chunk_id)
+
         if not all_chunks:
-            logger.warning("No document text to index!")
+            logger.warning("No content to index!")
             return 0
 
         logger.info(
-            f"Indexing {len(all_chunks)} chunks from {doc_count} documents..."
+            f"Indexing {len(all_chunks)} chunks from {doc_count} documents "
+            f"and {entry_count} docket entry descriptions..."
         )
 
         # Embed in batches
@@ -214,11 +246,44 @@ class CaseIndex:
         logger.info(f"Indexed {len(all_chunks)} chunks successfully.")
         return len(all_chunks)
 
+    def _build_where_filter(
+        self,
+        doc_type_filter: Optional[str] = None,
+        source_filter: Optional[str] = None,
+        entry_ids: Optional[list[int]] = None,
+    ) -> Optional[dict]:
+        """Build a ChromaDB where filter from optional constraints.
+
+        Args:
+            doc_type_filter: Filter to a specific doc_type value.
+            source_filter: "document" or "docket_entry".
+            entry_ids: Restrict to chunks from these docket_entry_ids.
+
+        Returns:
+            A ChromaDB where dict, or None if no filters.
+        """
+        conditions = []
+
+        if doc_type_filter:
+            conditions.append({"doc_type": doc_type_filter})
+        if source_filter:
+            conditions.append({"source": source_filter})
+        if entry_ids:
+            conditions.append({"docket_entry_id": {"$in": entry_ids}})
+
+        if not conditions:
+            return None
+        if len(conditions) == 1:
+            return conditions[0]
+        return {"$and": conditions}
+
     def query(
         self,
         question: str,
         top_k: int = config.RETRIEVAL_TOP_K,
         doc_type_filter: Optional[str] = None,
+        source_filter: Optional[str] = None,
+        entry_ids: Optional[list[int]] = None,
     ) -> list[dict]:
         """Query the index with a natural language question.
 
@@ -226,6 +291,9 @@ class CaseIndex:
             question: The user's question.
             top_k: Number of chunks to retrieve.
             doc_type_filter: Optional DocType value to filter by.
+            source_filter: Optional "document" or "docket_entry" to
+                restrict which pool of content to search.
+            entry_ids: Optional list of docket_entry_ids to restrict to.
 
         Returns:
             List of dicts with keys: text, metadata, distance
@@ -236,10 +304,7 @@ class CaseIndex:
             logger.error(f"No index found for case {self.docket_id}")
             return []
 
-        # Build optional filter
-        where_filter = None
-        if doc_type_filter:
-            where_filter = {"doc_type": doc_type_filter}
+        where_filter = self._build_where_filter(doc_type_filter, source_filter, entry_ids)
 
         # Embed question
         q_embedding = embed_texts([question], is_query=True)[0]
@@ -264,3 +329,55 @@ class CaseIndex:
                 )
 
         return chunks
+
+    def query_descriptions(
+        self,
+        question: str,
+        top_k: int = 20,
+        doc_type_filter: Optional[str] = None,
+    ) -> list[dict]:
+        """Search only docket entry descriptions (stage 1 of two-stage retrieval).
+
+        Searches the full docket (all entries, not just those with documents)
+        to find relevant entries by their descriptions.
+
+        Args:
+            question: The user's question.
+            top_k: Number of description matches to return.
+            doc_type_filter: Optional DocType value to filter by.
+
+        Returns:
+            List of dicts with keys: text, metadata, distance
+        """
+        return self.query(
+            question=question,
+            top_k=top_k,
+            doc_type_filter=doc_type_filter,
+            source_filter="docket_entry",
+        )
+
+    def query_documents(
+        self,
+        question: str,
+        top_k: int = config.RETRIEVAL_TOP_K,
+        doc_type_filter: Optional[str] = None,
+        entry_ids: Optional[list[int]] = None,
+    ) -> list[dict]:
+        """Search only full document chunks (stage 2 of two-stage retrieval).
+
+        Args:
+            question: The user's question.
+            top_k: Number of document chunks to return.
+            doc_type_filter: Optional DocType value to filter by.
+            entry_ids: If provided, only search chunks from these entries.
+
+        Returns:
+            List of dicts with keys: text, metadata, distance
+        """
+        return self.query(
+            question=question,
+            top_k=top_k,
+            doc_type_filter=doc_type_filter,
+            source_filter="document",
+            entry_ids=entry_ids,
+        )

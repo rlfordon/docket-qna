@@ -4,9 +4,10 @@ API docs: https://www.courtlistener.com/help/api/rest/
 PACER APIs: https://www.courtlistener.com/help/api/rest/v3/pacer/
 """
 
+import json
 import time
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from typing import Optional
 
 import requests
@@ -90,12 +91,18 @@ class CourtListenerClient:
             self._request_count = 0
             self._window_start = time.time()
 
-    def _get(self, url: str, params: dict = None) -> dict:
-        """Make a GET request with throttling and error handling."""
-        self._throttle()
-        resp = self.session.get(url, params=params)
-        resp.raise_for_status()
-        return resp.json()
+    def _get(self, url: str, params: dict = None, retries: int = 3) -> dict:
+        """Make a GET request with throttling, retry on 5xx, and error handling."""
+        for attempt in range(retries):
+            self._throttle()
+            resp = self.session.get(url, params=params)
+            if resp.status_code >= 500 and attempt < retries - 1:
+                wait = 2 ** attempt
+                logger.warning(f"  Server error {resp.status_code}, retrying in {wait}s...")
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            return resp.json()
 
     def _get_paginated(self, url: str, params: dict = None) -> list[dict]:
         """Fetch all pages of a paginated API response."""
@@ -187,6 +194,8 @@ class CourtListenerClient:
 
         # Extract bankruptcy-specific info if available
         bk_info = docket.get("bankruptcy_information") or {}
+        if isinstance(bk_info, str):
+            bk_info = {}
 
         case = BankruptcyCase(
             docket_id=docket_id,
@@ -206,8 +215,9 @@ class CourtListenerClient:
         case.total_entry_count = len(raw_entries)
         logger.info(f"  Found {case.total_entry_count} docket entries")
 
-        # Build entry lookup
+        # Build entry lookups (by ID and by entry_number)
         entry_map = {}
+        entry_by_number = {}
         for raw in raw_entries:
             entry = DocketEntry(
                 id=raw["id"],
@@ -217,6 +227,8 @@ class CourtListenerClient:
             )
             case.entries.append(entry)
             entry_map[entry.id] = entry
+            if entry.entry_number is not None:
+                entry_by_number[entry.entry_number] = entry
 
         # 3. Available documents
         logger.info("  Fetching available RECAP documents...")
@@ -226,7 +238,6 @@ class CourtListenerClient:
         for raw_doc in raw_docs:
             # Link document to its docket entry
             de_url = raw_doc.get("docket_entry", "")
-            # Extract docket_entry ID from URL or nested object
             de_id = None
             if isinstance(de_url, str) and "/" in de_url:
                 try:
@@ -248,16 +259,25 @@ class CourtListenerClient:
                 page_count=raw_doc.get("page_count"),
             )
 
-            # Attach to entry and set ECF number
+            # Attach to entry — try by ID first, then by document_number
+            entry = None
             if de_id and de_id in entry_map:
                 entry = entry_map[de_id]
+            else:
+                doc_num = raw_doc.get("document_number")
+                if doc_num is not None:
+                    try:
+                        entry = entry_by_number.get(int(doc_num))
+                    except (ValueError, TypeError):
+                        pass
+
+            if entry:
                 entry.documents.append(doc)
+                doc.docket_entry_id = entry.id
                 if entry.entry_number:
                     doc.ecf_number = f"ECF No. {entry.entry_number}"
-                # Use entry description if doc description is empty
                 if not doc.description and entry.description:
                     doc.description = entry.description
-                # Use entry date if doc date is missing
                 if not doc.date_filed and entry.date_filed:
                     doc.date_filed = entry.date_filed
 
@@ -300,6 +320,49 @@ class CourtListenerClient:
         resp = self.session.post(url, json=payload)
         resp.raise_for_status()
         return resp.json()
+
+
+# --- Case Caching ---
+
+def save_case(case: BankruptcyCase) -> None:
+    """Save a BankruptcyCase to disk as JSON for quick reload."""
+    path = config.CASES_DIR / f"{case.docket_id}.json"
+    path.write_text(json.dumps(asdict(case), default=str), encoding="utf-8")
+    logger.info(f"Cached case {case.docket_id} to {path}")
+
+
+def load_cached_case(docket_id: int) -> Optional[BankruptcyCase]:
+    """Load a BankruptcyCase from disk cache, or return None if not cached."""
+    path = config.CASES_DIR / f"{docket_id}.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        entries = []
+        for e in data.pop("entries", []):
+            docs = [RecapDocument(**d) for d in e.pop("documents", [])]
+            entries.append(DocketEntry(**e, documents=docs))
+        return BankruptcyCase(**data, entries=entries)
+    except Exception:
+        logger.exception(f"Failed to load cached case {docket_id}")
+        return None
+
+
+def list_cached_cases() -> list[dict]:
+    """Return summary info (docket_id, case_name, docket_number) for all cached cases."""
+    cases = []
+    for path in sorted(config.CASES_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            cases.append({
+                "docket_id": data["docket_id"],
+                "case_name": data.get("case_name", "Unknown"),
+                "docket_number": data.get("docket_number", ""),
+                "court": data.get("court", ""),
+            })
+        except Exception:
+            continue
+    return cases
 
 
 # --- URL Parsing Helpers ---

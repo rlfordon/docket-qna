@@ -42,12 +42,14 @@ RETRIEVAL_TOP_K = int(os.getenv("RETRIEVAL_TOP_K", "12"))
 PROJECT_ROOT = Path(__file__).parent
 DATA_DIR = PROJECT_ROOT / "data"
 CHROMA_DIR = DATA_DIR / "chroma"
+CASES_DIR = DATA_DIR / "cases"
 PROMPTS_DIR = PROJECT_ROOT / "prompts"
 SYSTEM_PROMPT_PATH = PROMPTS_DIR / "system_prompt.txt"
 
 # Ensure directories exist
 DATA_DIR.mkdir(exist_ok=True)
 CHROMA_DIR.mkdir(exist_ok=True)
+CASES_DIR.mkdir(exist_ok=True)
 
 
 def validate_config():

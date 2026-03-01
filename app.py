@@ -9,7 +9,10 @@ import logging
 import streamlit as st
 
 import config
-from courtlistener import CourtListenerClient, parse_courtlistener_url, BankruptcyCase
+from courtlistener import (
+    CourtListenerClient, parse_courtlistener_url, BankruptcyCase,
+    save_case, load_cached_case, list_cached_cases,
+)
 from classifier import classify_document, DocType, get_type_summary
 from indexer import CaseIndex
 from query import query_case
@@ -57,6 +60,19 @@ def main():
 
         st.divider()
 
+        # --- Recent Cases ---
+        st.header("Recent Cases")
+        cached = list_cached_cases()
+        if cached:
+            for c in cached:
+                label = f"{c['case_name'][:40]}"
+                if st.button(label, key=f"recent_{c['docket_id']}", use_container_width=True):
+                    _load_from_cache(c["docket_id"])
+        else:
+            st.caption("No cached cases yet.")
+
+        st.divider()
+
         # --- RECAP Info ---
         st.header("📬 Expand Coverage for Free")
         st.markdown(
@@ -70,6 +86,16 @@ def main():
         _render_case_loader()
     else:
         _render_case_dashboard()
+
+
+def _load_from_cache(docket_id: int):
+    """Load a cached case into session state and rerun."""
+    case = load_cached_case(docket_id)
+    if case:
+        st.session_state.case = case
+        st.session_state.index = CaseIndex(docket_id)
+        st.session_state.messages = []
+        st.rerun()
 
 
 def _render_case_loader():
@@ -102,8 +128,15 @@ def _render_case_loader():
                     )
                     return
 
-                client = CourtListenerClient()
-                case = client.load_case(docket_id, fetch_text=True)
+                # Try cache first
+                case = load_cached_case(docket_id)
+                if case:
+                    st.toast("Loaded from cache!")
+                else:
+                    client = CourtListenerClient()
+                    case = client.load_case(docket_id, fetch_text=True)
+                    save_case(case)
+
                 st.session_state.case = case
                 st.session_state.index = CaseIndex(docket_id)
                 st.session_state.messages = []
@@ -121,6 +154,9 @@ def _render_case_dashboard():
 
     # --- Case Header ---
     st.header(case.case_name)
+    import re
+    slug = re.sub(r"[^a-z0-9]+", "-", case.case_name.lower()).strip("-")
+    st.markdown(f"[View on CourtListener →](https://www.courtlistener.com/docket/{case.docket_id}/{slug}/)")
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Docket Number", case.docket_number)
@@ -175,6 +211,20 @@ def _render_case_dashboard():
             st.session_state.index = None
             st.session_state.messages = []
             st.rerun()
+    with col3:
+        if st.button("Refresh from API", use_container_width=True):
+            with st.spinner("Re-fetching case from CourtListener..."):
+                try:
+                    client = CourtListenerClient()
+                    refreshed = client.load_case(case.docket_id, fetch_text=True)
+                    save_case(refreshed)
+                    st.session_state.case = refreshed
+                    st.session_state.index = CaseIndex(case.docket_id)
+                    st.session_state.messages = []
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error refreshing case: {e}")
+                    logger.exception("Failed to refresh case")
 
     # --- Q&A Chat ---
     if is_indexed:
