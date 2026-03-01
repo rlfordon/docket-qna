@@ -118,6 +118,91 @@ def description_quality_stats(case: BankruptcyCase) -> dict:
     }
 
 
+def get_purchasable_for_entries(
+    case: BankruptcyCase,
+    entry_numbers: list[int],
+    client: "CourtListenerClient" = None,
+) -> list[dict]:
+    """Find purchasable documents for the given ECF entry numbers.
+
+    For entries that have no local RecapDocument records (the typical case
+    for description-only entries), queries the CourtListener API to find
+    document records that can be purchased.
+
+    Args:
+        case: The loaded BankruptcyCase.
+        entry_numbers: List of ECF entry numbers to check.
+        client: CourtListenerClient for API lookups. Required when entries
+            lack local document records.
+
+    Returns:
+        List of dicts with keys: entry_number, description, date_filed,
+        recap_document_id, purchasable.
+    """
+    entry_by_number = {
+        e.entry_number: e for e in case.entries if e.entry_number is not None
+    }
+
+    results = []
+    for num in entry_numbers:
+        entry = entry_by_number.get(num)
+        if not entry:
+            continue
+
+        info = {
+            "entry_number": num,
+            "description": entry.description or "",
+            "date_filed": entry.date_filed or "",
+            "recap_document_id": None,
+            "purchasable": False,
+        }
+
+        if entry.documents:
+            # Prefer a doc that is_available but has no text (purchasable gap)
+            target = None
+            for doc in entry.documents:
+                if doc.is_available and not doc.plain_text:
+                    target = doc
+                    break
+            if target is None:
+                target = entry.documents[0]
+
+            info["recap_document_id"] = target.id
+            info["purchasable"] = True
+        elif client:
+            # No local documents — query the API for recap document records
+            # on this docket entry (including unavailable ones)
+            try:
+                url = f"{config.CL_BASE_URL}/recap-documents/"
+                params = {
+                    "docket_entry__docket": case.docket_id,
+                    "docket_entry": entry.id,
+                }
+                data = client._get(url, params)
+                api_docs = data.get("results", [])
+                if api_docs:
+                    # Use the first document record found
+                    info["recap_document_id"] = api_docs[0]["id"]
+                    info["purchasable"] = True
+                    logger.info(
+                        f"Found recap document {api_docs[0]['id']} "
+                        f"for entry {num} via API"
+                    )
+                else:
+                    logger.warning(
+                        f"No recap document records found for ECF No. {num} "
+                        f"(docket_entry={entry.id})"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to look up recap documents for ECF No. {num}: {e}"
+                )
+
+        results.append(info)
+
+    return results
+
+
 class CourtListenerClient:
     """Client for interacting with the CourtListener REST API."""
 
@@ -367,9 +452,9 @@ class CourtListenerClient:
             "pacer_password": config.PACER_PASSWORD,
         }
         if date_start:
-            payload["date_start"] = date_start
+            payload["de_date_start"] = date_start
         if date_end:
-            payload["date_end"] = date_end
+            payload["de_date_end"] = date_end
         resp = self.session.post(url, json=payload)
         resp.raise_for_status()
         return resp.json()

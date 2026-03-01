@@ -246,6 +246,75 @@ class CaseIndex:
         logger.info(f"Indexed {len(all_chunks)} chunks successfully.")
         return len(all_chunks)
 
+    def index_single_document(
+        self, case: BankruptcyCase, entry: DocketEntry, doc: RecapDocument
+    ) -> int:
+        """Incrementally index a single document into the existing collection.
+
+        Args:
+            case: The BankruptcyCase (for docket_id).
+            entry: The DocketEntry this document belongs to.
+            doc: The RecapDocument with plain_text to index.
+
+        Returns:
+            Number of chunks added.
+
+        Raises:
+            RuntimeError: If no existing index is found.
+        """
+        try:
+            collection = self.client.get_collection(self.collection_name)
+        except Exception:
+            raise RuntimeError(
+                f"No existing index for case {self.docket_id}. "
+                "Run index_case() first."
+            )
+
+        if not doc.plain_text or not doc.plain_text.strip():
+            logger.warning(f"Document {doc.id} has no text to index")
+            return 0
+
+        doc_type = classify_document(doc.description or entry.description)
+        chunks = chunk_text(doc.plain_text)
+
+        all_chunks = []
+        all_metadatas = []
+        all_ids = []
+
+        for i, chunk_text_str in enumerate(chunks):
+            chunk_id = build_chunk_id(case.docket_id, doc.id, i)
+            metadata = {
+                "docket_entry_id": entry.id,
+                "entry_number": entry.entry_number or 0,
+                "ecf_number": doc.ecf_number or f"Entry {entry.entry_number or '?'}",
+                "description": (doc.description or entry.description or "")[:500],
+                "doc_type": doc_type.value,
+                "date_filed": doc.date_filed or entry.date_filed or "",
+                "chunk_index": i,
+                "total_chunks": len(chunks),
+                "doc_id": doc.id,
+                "source": "document",
+            }
+            all_chunks.append(chunk_text_str)
+            all_metadatas.append(metadata)
+            all_ids.append(chunk_id)
+
+        if not all_chunks:
+            return 0
+
+        logger.info(f"Indexing {len(all_chunks)} chunks from document {doc.id}...")
+        embeddings = embed_texts(all_chunks, is_query=False)
+
+        collection.add(
+            ids=all_ids,
+            embeddings=embeddings,
+            documents=all_chunks,
+            metadatas=all_metadatas,
+        )
+
+        logger.info(f"Indexed {len(all_chunks)} chunks for document {doc.id}")
+        return len(all_chunks)
+
     def reindex_descriptions(self, case: BankruptcyCase) -> int:
         """Re-index only docket entry descriptions, preserving document chunks.
 

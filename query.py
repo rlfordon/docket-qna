@@ -3,6 +3,7 @@
 Supports Anthropic (Claude) and OpenAI as LLM providers.
 """
 
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -385,7 +386,10 @@ def load_system_prompt(case: BankruptcyCase) -> str:
     else:
         template = DEFAULT_SYSTEM_PROMPT
 
-    return template.format(
+    # Include purchase suggestion instructions only when PACER creds are configured
+    purchase_block = _PURCHASE_SUGGESTION_INSTRUCTIONS if config.has_pacer_credentials() else ""
+
+    format_kwargs = dict(
         case_name=case.case_name,
         docket_number=case.docket_number,
         court=case.court,
@@ -395,7 +399,18 @@ def load_system_prompt(case: BankruptcyCase) -> str:
         total_entries=case.total_entry_count,
         available_docs=case.available_doc_count,
         coverage_pct=f"{case.coverage_pct:.0f}",
+        purchase_suggestion_block=purchase_block,
     )
+
+    try:
+        return template.format(**format_kwargs)
+    except KeyError:
+        # External prompt file may not have {purchase_suggestion_block} placeholder —
+        # append purchase instructions directly if PACER creds are configured
+        result = template.format(**{k: v for k, v in format_kwargs.items() if k != "purchase_suggestion_block"})
+        if purchase_block:
+            result += "\n" + purchase_block
+        return result
 
 
 def format_context(chunks: list[dict]) -> str:
@@ -421,7 +436,9 @@ def format_context(chunks: list[dict]) -> str:
         doc_type = meta.get("doc_type", "other")
         chunk_info = f"(chunk {meta.get('chunk_index', 0)+1}/{meta.get('total_chunks', 1)})"
 
-        header = f"[Source {i}: {ecf} | {doc_type} | {date} | {desc} {chunk_info}]"
+        source = meta.get("source", "document")
+        desc_tag = " (DESCRIPTION ONLY — no document text available)" if source == "docket_entry" else ""
+        header = f"[Source {i}: {ecf} | {doc_type} | {date} | {desc}{desc_tag} {chunk_info}]"
         context_parts.append(f"{header}\n{chunk['text']}")
 
         seen_entries.add(meta.get("entry_number", 0))
@@ -477,6 +494,7 @@ def query_case(
             "answer": answer,
             "sources": [],
             "chunks_used": 0,
+            "suggested_purchases": [],
         }
 
     # --- Two-stage retrieval ---
@@ -556,6 +574,7 @@ def query_case(
             ),
             "sources": [],
             "chunks_used": 0,
+            "suggested_purchases": [],
         }
 
     # Build context and prompt
@@ -569,7 +588,14 @@ def query_case(
         f"**Retrieved Documents:**\n\n{context}"
     )
 
-    answer = _call_llm(system_prompt, user_message)
+    raw_response = _call_llm(system_prompt, user_message)
+
+    # Parse structured JSON output (answer + purchase suggestions)
+    if config.has_pacer_credentials():
+        answer, suggested_purchases = _parse_llm_response(raw_response)
+    else:
+        answer = raw_response
+        suggested_purchases = []
 
     # Extract source references
     sources = []
@@ -591,7 +617,56 @@ def query_case(
         "answer": answer,
         "sources": sources,
         "chunks_used": len(all_chunks),
+        "suggested_purchases": suggested_purchases,
     }
+
+
+def _parse_llm_response(response_text: str) -> tuple[str, list[dict]]:
+    """Parse an LLM response that may contain structured JSON output.
+
+    Handles three cases:
+    1. Entire response is JSON — ideal
+    2. JSON wrapped in markdown fences
+    3. Prose followed by JSON (LLM didn't follow instructions perfectly)
+
+    Returns:
+        (answer_text, suggested_purchases) — falls back to
+        (full response, []) if no valid JSON found.
+    """
+    text = response_text.strip()
+
+    # Try parsing candidates in priority order
+    candidates = [text]
+
+    # Strip markdown fences if present
+    if "```" in text:
+        fenced = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
+        if fenced:
+            candidates.insert(0, fenced.group(1).strip())
+
+    # Extract JSON object starting at {"answer" (LLM wrote prose then JSON)
+    answer_match = re.search(r'\{"answer"', text)
+    if answer_match:
+        candidates.insert(0, text[answer_match.start():].strip())
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict) and "answer" in parsed:
+                answer = parsed["answer"]
+                purchases = parsed.get("suggested_purchases", [])
+                valid = []
+                for p in purchases:
+                    if isinstance(p, dict) and "ecf_number" in p:
+                        valid.append({
+                            "ecf_number": p["ecf_number"],
+                            "reason": p.get("reason", ""),
+                        })
+                return answer, valid
+        except (json.JSONDecodeError, TypeError, KeyError):
+            continue
+
+    return response_text, []
 
 
 def _call_llm(system_prompt: str, user_message: str) -> str:
@@ -678,4 +753,19 @@ DEFAULT_SYSTEM_PROMPT = """You are a bankruptcy case research assistant analyzin
 8. **Be concise but thorough.** Provide the key information without unnecessary elaboration, but don't omit important details or caveats.
 
 9. **You have access to docket entry descriptions** in addition to full document text. Docket entry descriptions are short summaries from the court's docket sheet (e.g., "Motion to Extend Deadline", "Order Granting Relief"). Use these to answer questions about what was filed, case timelines, and docket activity — even if the full document text is not available.
+
+{purchase_suggestion_block}"""
+
+
+_PURCHASE_SUGGESTION_INSTRUCTIONS = """
+10. **CRITICAL — Response format.** Your ENTIRE response must be a single JSON object. Do NOT write any text before or after the JSON. Some sources above are marked "(DESCRIPTION ONLY — no document text available)". Your response format:
+
+{{"answer": "Your full answer here, with all ECF citations, caveats, and formatting. Use markdown within this string.", "suggested_purchases": [{{"ecf_number": 47, "reason": "One-sentence explanation of why this document would improve the answer"}}]}}
+
+Rules:
+- Your ENTIRE response must be this JSON object — nothing else
+- Put your complete answer (with all citations, caveats, markdown formatting) inside the "answer" field
+- suggested_purchases: only include ECF numbers marked "DESCRIPTION ONLY" above whose full text would materially improve the answer
+- If the answer is well-supported, use an empty list: "suggested_purchases": []
+- Keep reasons concise (one sentence)
 """

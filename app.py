@@ -12,7 +12,7 @@ import config
 from courtlistener import (
     CourtListenerClient, parse_courtlistener_url, BankruptcyCase,
     save_case, load_cached_case, list_cached_cases, description_quality_stats,
-    get_poor_description_date_range,
+    get_poor_description_date_range, get_purchasable_for_entries,
 )
 from classifier import classify_document, DocType, get_type_summary
 from indexer import CaseIndex
@@ -20,6 +20,11 @@ from query import query_case
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _escape_dollars(text: str) -> str:
+    """Escape bare $ signs so Streamlit doesn't render them as LaTeX."""
+    return text.replace("$", "\\$")
 
 # --- Page Config ---
 st.set_page_config(
@@ -39,6 +44,10 @@ if "show_pacer_confirm" not in st.session_state:
     st.session_state.show_pacer_confirm = False
 if "pacer_date_range" not in st.session_state:
     st.session_state.pacer_date_range = (None, None)
+if "pending_purchases" not in st.session_state:
+    st.session_state.pending_purchases = None  # {question, suggestions, doc_type_filter}
+if "purchase_in_progress" not in st.session_state:
+    st.session_state.purchase_in_progress = False
 
 
 def main():
@@ -155,6 +164,142 @@ def _execute_pacer_update(case: BankruptcyCase):
     except Exception as e:
         st.error(f"Error during PACER update: {e}")
         logger.exception("PACER update failed")
+
+
+def _execute_doc_purchases():
+    """Purchase suggested documents, index them, and re-answer the question."""
+    case: BankruptcyCase = st.session_state.case
+    index: CaseIndex = st.session_state.index
+    pending = st.session_state.pending_purchases
+    if not pending:
+        return
+
+    question = pending["question"]
+    suggestions = pending["suggestions"]
+    doc_type_filter = pending.get("doc_type_filter")
+
+    client = CourtListenerClient()
+
+    ecf_numbers = [s["ecf_number"] for s in suggestions]
+    purchasable = get_purchasable_for_entries(case, ecf_numbers, client=client)
+    purchased_count = 0
+
+    for info in purchasable:
+        if not info["purchasable"] or not info["recap_document_id"]:
+            st.warning(f"ECF No. {info['entry_number']}: No purchasable document found")
+            continue
+
+        try:
+            # Purchase
+            with st.spinner(f"Purchasing ECF No. {info['entry_number']}..."):
+                result = client.purchase_document(info["recap_document_id"])
+                request_id = result.get("id")
+                if not request_id:
+                    st.warning(f"ECF No. {info['entry_number']}: No request ID returned")
+                    continue
+
+            # Poll
+            with st.spinner(f"Waiting for ECF No. {info['entry_number']}..."):
+                client.poll_purchase_status(request_id)
+
+            # Re-fetch the document to get the text
+            with st.spinner(f"Fetching document text for ECF No. {info['entry_number']}..."):
+                doc_url = f"{config.CL_BASE_URL}/recap-documents/{info['recap_document_id']}/"
+                doc_data = client._get(doc_url)
+                plain_text = doc_data.get("plain_text", "") or ""
+
+            if not plain_text.strip():
+                st.warning(f"ECF No. {info['entry_number']}: Document purchased but no text extracted")
+                continue
+
+            # Update the case data
+            entry_by_number = {
+                e.entry_number: e for e in case.entries if e.entry_number is not None
+            }
+            entry = entry_by_number.get(info["entry_number"])
+            if entry:
+                # Find the matching doc and update its text
+                for doc in entry.documents:
+                    if doc.id == info["recap_document_id"]:
+                        doc.plain_text = plain_text
+                        break
+                else:
+                    # Doc not attached yet — shouldn't happen, but handle it
+                    from courtlistener import RecapDocument
+                    new_doc = RecapDocument(
+                        id=info["recap_document_id"],
+                        docket_entry_id=entry.id,
+                        description=entry.description,
+                        date_filed=entry.date_filed,
+                        ecf_number=f"ECF No. {entry.entry_number}",
+                        plain_text=plain_text,
+                        is_available=True,
+                        pacer_doc_id=None,
+                    )
+                    entry.documents.append(new_doc)
+                    doc = new_doc
+
+                # Index the document
+                with st.spinner(f"Indexing ECF No. {info['entry_number']}..."):
+                    chunks_added = index.index_single_document(case, entry, doc)
+                    st.caption(f"ECF No. {info['entry_number']}: indexed {chunks_added} chunks")
+
+                purchased_count += 1
+
+        except TimeoutError:
+            st.warning(f"ECF No. {info['entry_number']}: Purchase timed out. It may still complete — try again later.")
+        except RuntimeError as e:
+            err = str(e)
+            if "Unable to download PDF" in err:
+                st.warning(
+                    f"ECF No. {info['entry_number']}: This document couldn't be fetched "
+                    f"via the API. It may require direct download from PACER "
+                    f"([ecf.nysb.uscourts.gov](https://ecf.nysb.uscourts.gov))."
+                )
+            else:
+                st.warning(f"ECF No. {info['entry_number']}: Purchase failed — {err}")
+            logger.warning(f"Purchase failed for ECF No. {info['entry_number']}: {e}")
+        except Exception as e:
+            st.warning(f"ECF No. {info['entry_number']}: Unexpected error — {e}")
+            logger.exception(f"Failed to purchase ECF No. {info['entry_number']}")
+
+    if purchased_count > 0:
+        # Save updated case
+        save_case(case)
+        case.available_doc_count += purchased_count
+
+        # Re-answer the question
+        st.info(f"Purchased {purchased_count} document(s). Re-answering your question...")
+        with st.spinner("Generating improved answer..."):
+            result = query_case(
+                question=question,
+                case=case,
+                index=index,
+                doc_type_filter=doc_type_filter,
+            )
+
+        st.markdown(_escape_dollars(result["answer"]))
+        if result["sources"]:
+            with st.expander("Sources"):
+                for src in result["sources"]:
+                    st.caption(
+                        f"**{src['ecf_number']}** — "
+                        f"{src['description'][:100]} "
+                        f"({src['date_filed']})"
+                    )
+
+        # Save improved answer to history
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": result["answer"],
+            "sources": result.get("sources", []),
+        })
+    else:
+        st.warning("No documents could be purchased. The answer remains unchanged.")
+
+    # Clear pending state
+    st.session_state.pending_purchases = None
+    st.session_state.purchase_in_progress = False
 
 
 def _render_case_loader():
@@ -275,8 +420,8 @@ def _render_case_dashboard():
                 )
             st.warning(
                 f"{scope_msg}\n\n"
-                "**PACER costs:** Docket sheets are billed at ~$0.10/page. "
-                "Large cases may cost $5-$20+. Charges are non-refundable."
+                "**PACER costs:** Docket sheets are billed at ~\\$0.10/page. "
+                "Large cases may cost \\$5–\\$20+. Charges are non-refundable."
             )
             col_yes, col_no = st.columns(2)
             with col_yes:
@@ -359,17 +504,61 @@ def _render_case_dashboard():
         # Chat messages
         for msg in st.session_state.messages:
             with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
+                st.markdown(_escape_dollars(msg["content"]))
                 if msg.get("sources"):
-                    with st.expander("📄 Sources"):
+                    with st.expander("Sources"):
                         for src in msg["sources"]:
                             st.caption(
                                 f"**{src['ecf_number']}** — {src['description'][:100]} "
                                 f"({src['date_filed']})"
                             )
 
+        # Handle pending purchase action
+        if st.session_state.purchase_in_progress:
+            with st.chat_message("assistant"):
+                _execute_doc_purchases()
+
+        # Show pending purchase suggestions (if any, from last answer)
+        if st.session_state.pending_purchases and not st.session_state.purchase_in_progress:
+            pending = st.session_state.pending_purchases
+            suggestions = pending["suggestions"]
+
+            st.markdown("**Documents that could improve this answer:**")
+            selected = []
+            for i, s in enumerate(suggestions):
+                checked = st.checkbox(
+                    f"ECF No. {s['ecf_number']} — {s['reason']}",
+                    value=True,
+                    key=f"purchase_cb_{s['ecf_number']}_{i}",
+                )
+                if checked:
+                    selected.append(s)
+
+            st.caption("PACER documents are capped at \\$3 each.")
+
+            col_buy, col_skip = st.columns(2)
+            with col_buy:
+                if st.button(
+                    f"Purchase ({len(selected)}) & Re-answer",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=len(selected) == 0,
+                ):
+                    # Store only the selected suggestions
+                    st.session_state.pending_purchases["suggestions"] = selected
+                    st.session_state.purchase_in_progress = True
+                    st.rerun()
+            with col_skip:
+                if st.button("Dismiss", use_container_width=True):
+                    st.session_state.pending_purchases = None
+                    st.rerun()
+
         # Chat input
         if question := st.chat_input("Ask about this case..."):
+            # Clear any pending purchase state from previous question
+            st.session_state.pending_purchases = None
+            st.session_state.purchase_in_progress = False
+
             # Add user message
             st.session_state.messages.append({"role": "user", "content": question})
             with st.chat_message("user"):
@@ -385,10 +574,10 @@ def _render_case_dashboard():
                             index=index,
                             doc_type_filter=doc_type_filter,
                         )
-                        st.markdown(result["answer"])
+                        st.markdown(_escape_dollars(result["answer"]))
 
                         if result["sources"]:
-                            with st.expander("📄 Sources"):
+                            with st.expander("Sources"):
                                 for src in result["sources"]:
                                     st.caption(
                                         f"**{src['ecf_number']}** — "
@@ -401,9 +590,19 @@ def _render_case_dashboard():
                             {
                                 "role": "assistant",
                                 "content": result["answer"],
-                                "sources": result["sources"],
+                                "sources": result.get("sources", []),
                             }
                         )
+
+                        # Show purchase suggestions if available
+                        purchases = result.get("suggested_purchases", [])
+                        if purchases and config.has_pacer_credentials():
+                            st.session_state.pending_purchases = {
+                                "question": question,
+                                "suggestions": purchases,
+                                "doc_type_filter": doc_type_filter,
+                            }
+                            st.rerun()
 
                     except Exception as e:
                         error_msg = f"Error generating answer: {e}"
