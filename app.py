@@ -36,6 +36,7 @@ def _linkify_ecf_numbers(text: str, docket_id: int, case_name: str) -> str:
         lambda m: (
             f"[ECF No. {m.group(1)}]"
             f"(https://www.courtlistener.com/docket/{docket_id}/{slug}/"
+            f"?entry_gte={m.group(1)}&entry_lte={m.group(1)}"
             f"#entry-{m.group(1)})"
         ),
         text,
