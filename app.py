@@ -119,10 +119,19 @@ def main():
 
     if config.DEMO_MODE:
         st.info(
-            "**Live Demo** — This instance has two preloaded bankruptcy cases. "
-            "Pick a case and ask questions to see AI-generated answers with ECF citations. "
-            "No API keys or PACER account needed."
+            "**Live Demo** — Explore bankruptcy court filings with AI.  \n"
+            "**1.** Pick a case from the sidebar  \n"
+            "**2.** Ask a question in plain English  \n"
+            "**3.** Get an answer grounded in the docket with ECF citations"
         )
+        with st.expander("💡 Example questions to try"):
+            st.markdown(
+                "- What motions have been filed in this case?\n"
+                "- Who are the largest creditors?\n"
+                "- What is the timeline of key events?\n"
+                "- Has a plan of reorganization been proposed?\n"
+                "- What objections have been raised?"
+            )
 
     case: BankruptcyCase | None = st.session_state.case
     index: CaseIndex | None = st.session_state.index
