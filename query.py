@@ -451,6 +451,7 @@ def query_case(
     case: BankruptcyCase,
     index: CaseIndex,
     doc_type_filter: Optional[str] = None,
+    descriptions_only: bool = False,
     top_k: int = config.RETRIEVAL_TOP_K,
     progress: Optional[Callable[[str], None]] = None,
 ) -> dict:
@@ -466,6 +467,8 @@ def query_case(
         case: The loaded BankruptcyCase.
         index: The CaseIndex for this case.
         doc_type_filter: Optional doc type to filter retrieval (overrides classifier).
+        descriptions_only: If True, skip document chunk retrieval and use only
+            docket entry descriptions (faster, shallower results).
         top_k: Number of chunks to retrieve.
 
     Returns:
@@ -525,52 +528,56 @@ def query_case(
         doc_type_filter=effective_type_filter,
     )
 
-    # Collect entry IDs from the description hits for stage 2
-    hit_entry_ids = list({
-        h["metadata"]["docket_entry_id"]
-        for h in desc_hits
-        if h["metadata"].get("docket_entry_id")
-    })
-
-    # Stage 2: search document chunks, scoped to the entries we found
-    _progress("Retrieving document passages...")
-    if hit_entry_ids:
-        doc_chunks = index.query_documents(
-            question=question,
-            top_k=top_k,
-            doc_type_filter=effective_type_filter,
-            entry_ids=hit_entry_ids,
-        )
+    if descriptions_only:
+        # Skip document chunk retrieval — use description hits directly
+        all_chunks = desc_hits
     else:
-        doc_chunks = []
+        # Collect entry IDs from the description hits for stage 2
+        hit_entry_ids = list({
+            h["metadata"]["docket_entry_id"]
+            for h in desc_hits
+            if h["metadata"].get("docket_entry_id")
+        })
 
-    # If stage 2 came up short, also do an unscoped document search to
-    # catch relevant content from entries whose descriptions didn't match
-    if len(doc_chunks) < top_k:
-        remaining = top_k - len(doc_chunks)
-        fallback_chunks = index.query_documents(
-            question=question,
-            top_k=remaining,
-            doc_type_filter=effective_type_filter,
-        )
-        # Deduplicate by chunk text
-        seen_texts = {c["text"] for c in doc_chunks}
-        for fc in fallback_chunks:
-            if fc["text"] not in seen_texts:
-                doc_chunks.append(fc)
-                seen_texts.add(fc["text"])
+        # Stage 2: search document chunks, scoped to the entries we found
+        _progress("Retrieving document passages...")
+        if hit_entry_ids:
+            doc_chunks = index.query_documents(
+                question=question,
+                top_k=top_k,
+                doc_type_filter=effective_type_filter,
+                entry_ids=hit_entry_ids,
+            )
+        else:
+            doc_chunks = []
 
-    # Combine: description hits (for breadth) + document chunks (for depth)
-    # Deduplicate and prioritize document chunks over descriptions for the
-    # same entry, since doc chunks have the actual content.
-    doc_entry_ids = {c["metadata"].get("docket_entry_id") for c in doc_chunks}
-    unique_desc_hits = [
-        d for d in desc_hits
-        if d["metadata"].get("docket_entry_id") not in doc_entry_ids
-    ]
+        # If stage 2 came up short, also do an unscoped document search to
+        # catch relevant content from entries whose descriptions didn't match
+        if len(doc_chunks) < top_k:
+            remaining = top_k - len(doc_chunks)
+            fallback_chunks = index.query_documents(
+                question=question,
+                top_k=remaining,
+                doc_type_filter=effective_type_filter,
+            )
+            # Deduplicate by chunk text
+            seen_texts = {c["text"] for c in doc_chunks}
+            for fc in fallback_chunks:
+                if fc["text"] not in seen_texts:
+                    doc_chunks.append(fc)
+                    seen_texts.add(fc["text"])
 
-    # Put doc chunks first (richer content), then unique description hits
-    all_chunks = doc_chunks + unique_desc_hits
+        # Combine: description hits (for breadth) + document chunks (for depth)
+        # Deduplicate and prioritize document chunks over descriptions for the
+        # same entry, since doc chunks have the actual content.
+        doc_entry_ids = {c["metadata"].get("docket_entry_id") for c in doc_chunks}
+        unique_desc_hits = [
+            d for d in desc_hits
+            if d["metadata"].get("docket_entry_id") not in doc_entry_ids
+        ]
+
+        # Put doc chunks first (richer content), then unique description hits
+        all_chunks = doc_chunks + unique_desc_hits
 
     if not all_chunks:
         return {
