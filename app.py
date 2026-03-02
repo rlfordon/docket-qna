@@ -174,7 +174,7 @@ def _render_sidebar_no_case():
     # --- Footer ---
     st.caption(
         "Powered by [CourtListener](https://www.courtlistener.com/) · "
-        "[Open source](https://github.com/rlfordon/docket-qna)"
+        "[About](https://github.com/rlfordon/docket-qna)"
     )
 
 
@@ -299,6 +299,12 @@ def _render_sidebar_case_info(case: BankruptcyCase, index: CaseIndex, is_indexed
                 if st.button(label, key=f"switch_{c['docket_id']}", use_container_width=True):
                     _load_from_cache(c["docket_id"])
 
+        if config.DEMO_MODE:
+            st.info(
+                "The full version lets you load any federal bankruptcy case "
+                "by URL or docket number."
+            )
+
     # --- RECAP Promo ---
     st.caption(
         "📬 **Expand coverage for free** — set up "
@@ -309,7 +315,7 @@ def _render_sidebar_case_info(case: BankruptcyCase, index: CaseIndex, is_indexed
     # --- Footer ---
     st.caption(
         "Powered by [CourtListener](https://www.courtlistener.com/) · "
-        "[Open source](https://github.com/rlfordon/docket-qna)"
+        "[About](https://github.com/rlfordon/docket-qna)"
     )
 
 
