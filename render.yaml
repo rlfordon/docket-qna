@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: recap-demo
+    runtime: docker
+    plan: starter
+    envVars:
+      - key: DEMO_MODE
+        value: "true"
+      - key: ANTHROPIC_API_KEY
+        sync: false  # Set manually in Render dashboard
+      - key: OPENAI_API_KEY
+        sync: false  # Set manually in Render dashboard
+      - key: LLM_PROVIDER
+        value: anthropic
+      - key: EMBEDDING_PROVIDER
+        value: openai

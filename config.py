@@ -18,6 +18,9 @@ PACER_PASSWORD = os.getenv("PACER_PASSWORD", "")
 PACER_POLL_INTERVAL = int(os.getenv("PACER_POLL_INTERVAL", "3"))  # seconds
 PACER_POLL_TIMEOUT = int(os.getenv("PACER_POLL_TIMEOUT", "120"))  # seconds
 
+# --- Demo Mode ---
+DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
+
 # --- Provider Settings ---
 EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "flp")  # "flp" or "openai"
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")  # "anthropic" or "openai"
@@ -60,7 +63,7 @@ def validate_config():
     """Check that required configuration is present."""
     errors = []
 
-    if not COURTLISTENER_API_TOKEN or COURTLISTENER_API_TOKEN == "your_token_here":
+    if not DEMO_MODE and (not COURTLISTENER_API_TOKEN or COURTLISTENER_API_TOKEN == "your_token_here"):
         errors.append(
             "COURTLISTENER_API_TOKEN is not set. "
             "Get a free token at https://www.courtlistener.com/sign-in/"
