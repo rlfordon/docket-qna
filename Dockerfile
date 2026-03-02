@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir -r requirements-demo.txt
 COPY . .
 
 # Copy pre-built demo data into the runtime data directory
-RUN cp -r data-demo/cases data/cases && cp -r data-demo/chroma data/chroma
+RUN mkdir -p data && cp -r data-demo/cases data/cases && cp -r data-demo/chroma data/chroma
 
 EXPOSE 10000
 
