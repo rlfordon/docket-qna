@@ -57,22 +57,14 @@ def main():
         "powered by the RECAP Archive and CourtListener API."
     )
 
-    # --- Sidebar: Configuration ---
+    # --- Sidebar ---
     with st.sidebar:
-        st.header("Configuration")
-
-        # Validate config
+        # Validate config (errors stop the app; no success banner needed)
         errors = config.validate_config()
         if errors:
             for err in errors:
                 st.error(err)
             st.stop()
-
-        st.success("✓ API keys configured")
-        st.caption(f"Embedding: {config.EMBEDDING_PROVIDER.upper()}")
-        st.caption(f"LLM: {config.LLM_MODEL}")
-
-        st.divider()
 
         # --- Recent Cases ---
         st.header("Recent Cases")
@@ -84,16 +76,6 @@ def main():
                     _load_from_cache(c["docket_id"])
         else:
             st.caption("No cached cases yet.")
-
-        st.divider()
-
-        # --- RECAP Info ---
-        st.header("📬 Expand Coverage for Free")
-        st.markdown(
-            "Set up **@recap.email** as your ECF notification email "
-            "to automatically contribute filings to the RECAP Archive.\n\n"
-            "[Learn more →](https://free.law/recap/)"
-        )
 
     # --- Main Area: Case Loading ---
     if st.session_state.case is None:
@@ -355,106 +337,64 @@ def _render_case_dashboard():
     """Render the case dashboard with info, indexing, and Q&A."""
     case: BankruptcyCase = st.session_state.case
     index: CaseIndex = st.session_state.index
+    is_indexed = index.exists()
 
-    # --- Case Header ---
-    st.header(case.case_name)
     import re
     slug = re.sub(r"[^a-z0-9]+", "-", case.case_name.lower()).strip("-")
+
+    # --- Sidebar: filters, case nav, RECAP promo ---
+    with st.sidebar:
+        if is_indexed:
+            st.divider()
+            st.header("Search Filters")
+            filter_options = ["All document types"] + [dt.label for dt in DocType if dt != DocType.OTHER]
+            selected_filter = st.selectbox("Document type:", filter_options)
+
+            doc_type_filter = None
+            if selected_filter != "All document types":
+                for dt in DocType:
+                    if dt.label == selected_filter:
+                        doc_type_filter = dt.value
+                        break
+        else:
+            doc_type_filter = None
+
+        st.divider()
+        if st.button("Load Different Case", use_container_width=True):
+            st.session_state.case = None
+            st.session_state.index = None
+            st.session_state.messages = []
+            st.rerun()
+
+        st.divider()
+        st.markdown(
+            "**📬 Expand Coverage for Free**  \n"
+            "Set up **@recap.email** as your ECF notification email "
+            "to contribute filings to the RECAP Archive. "
+            "[Learn more →](https://free.law/recap/)"
+        )
+
+    # === Compact Case Header (always visible) ===
+    st.header(case.case_name)
     st.markdown(f"[View on CourtListener →](https://www.courtlistener.com/docket/{case.docket_id}/{slug}/)")
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Docket Number", case.docket_number)
-    col2.metric("Court", case.court.upper())
-    col3.metric("Chapter", case.chapter or "N/A")
-    col4.metric("Filed", case.date_filed or "Unknown")
+    # Summary bar
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.markdown(f"**Docket**  \n{case.docket_number}")
+    col2.markdown(f"**Court**  \n{case.court.upper()}")
+    col3.markdown(f"**Chapter**  \n{case.chapter or 'N/A'}")
+    col4.markdown(f"**Filed**  \n{case.date_filed or 'Unknown'}")
+    col5.markdown(
+        f"**Coverage**  \n{case.available_doc_count}/{case.total_entry_count} "
+        f"({case.coverage_pct:.0f}%)"
+    )
 
-    # --- Coverage Stats ---
-    st.subheader("Document Coverage")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Docket Entries", case.total_entry_count)
-    col2.metric("Documents in RECAP", case.available_doc_count)
-    col3.metric("Coverage", f"{case.coverage_pct:.0f}%")
-
-    # Document type breakdown
-    entry_dicts = [
-        {"description": e.description} for e in case.entries
-    ]
-    type_summary = get_type_summary(entry_dicts)
-
-    with st.expander("Filing Types Breakdown"):
-        for doc_type_label, count in type_summary.items():
-            st.write(f"**{doc_type_label}:** {count}")
-
-    # --- Description Quality Stats ---
-    st.subheader("Description Quality")
-    stats = description_quality_stats(case)
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Detailed Descriptions", stats["detailed"])
-    col2.metric("Stub/Minimal", stats["stub"])
-    col3.metric("Empty", stats["empty"])
-    col4.metric("Quality", f"{stats['detailed_pct']:.0f}%")
-    if case.last_updated:
-        st.caption(f"Last updated: {case.last_updated}")
-
-    # --- PACER Docket Update ---
-    if config.has_pacer_credentials():
-        improvable = stats["stub"] + stats["empty"]
-        if improvable > 0:
-            st.info(
-                f"{improvable} entries have minimal or empty descriptions. "
-                "Updating the docket from PACER can improve search quality."
-            )
-        if st.session_state.show_pacer_confirm:
-            date_start, date_end = st.session_state.pacer_date_range
-            if date_start and date_end:
-                scope_msg = (
-                    f"Purchase will be scoped to entries filed "
-                    f"**{date_start}** to **{date_end}** "
-                    f"({improvable} entries with poor descriptions)."
-                )
-            else:
-                scope_msg = (
-                    f"Date range could not be determined — "
-                    f"purchasing the **full docket** ({improvable} entries "
-                    f"with poor descriptions)."
-                )
-            st.warning(
-                f"{scope_msg}\n\n"
-                "**PACER costs:** Docket sheets are billed at ~\\$0.10/page. "
-                "Large cases may cost \\$5–\\$20+. Charges are non-refundable."
-            )
-            col_yes, col_no = st.columns(2)
-            with col_yes:
-                if st.button("Confirm Purchase", type="primary", use_container_width=True):
-                    st.session_state.show_pacer_confirm = False
-                    _execute_pacer_update(case)
-            with col_no:
-                if st.button("Cancel", use_container_width=True):
-                    st.session_state.show_pacer_confirm = False
-                    st.session_state.pacer_date_range = (None, None)
-                    st.rerun()
-        else:
-            if st.button("Update Docket from PACER", use_container_width=True):
-                st.session_state.pacer_date_range = get_poor_description_date_range(case)
-                st.session_state.show_pacer_confirm = True
-                st.rerun()
-
-    # --- Indexing ---
-    st.subheader("Index & Search")
-
-    is_indexed = index.exists()
+    # Index status + action (compact)
     if is_indexed:
-        st.success("✓ Case is indexed and ready for questions")
+        st.caption("✓ Indexed and ready for questions")
     else:
-        st.info("Case has not been indexed yet. Click below to index available documents.")
-
-    col1, col2, col3 = st.columns([1, 1, 2])
-    with col1:
-        if st.button(
-            "Re-index" if is_indexed else "Index Case",
-            type="primary",
-            use_container_width=True,
-        ):
+        st.info("Case has not been indexed yet.")
+        if st.button("Index Case", type="primary"):
             with st.spinner("Indexing documents... (this may take a few minutes)"):
                 try:
                     chunk_count = index.index_case(case)
@@ -463,43 +403,110 @@ def _render_case_dashboard():
                 except Exception as e:
                     st.error(f"Indexing failed: {e}")
                     logger.exception("Indexing failed")
-    with col2:
-        if st.button("Load Different Case", use_container_width=True):
-            st.session_state.case = None
-            st.session_state.index = None
-            st.session_state.messages = []
-            st.rerun()
-    with col3:
-        if st.button("Refresh from API", use_container_width=True):
-            with st.spinner("Re-fetching case from CourtListener..."):
-                try:
-                    client = CourtListenerClient()
-                    refreshed = client.load_case(case.docket_id, fetch_text=True)
-                    save_case(refreshed)
-                    st.session_state.case = refreshed
-                    st.session_state.index = CaseIndex(case.docket_id)
-                    st.session_state.messages = []
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error refreshing case: {e}")
-                    logger.exception("Failed to refresh case")
 
-    # --- Q&A Chat ---
+    # === Case Details & Controls (collapsible) ===
+    with st.expander("Case Details & Controls"):
+        # --- Coverage Stats ---
+        st.subheader("Document Coverage")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Docket Entries", case.total_entry_count)
+        col2.metric("Documents in RECAP", case.available_doc_count)
+        col3.metric("Coverage", f"{case.coverage_pct:.0f}%")
+
+        # Document type breakdown
+        entry_dicts = [
+            {"description": e.description} for e in case.entries
+        ]
+        type_summary = get_type_summary(entry_dicts)
+        for doc_type_label, count in type_summary.items():
+            st.write(f"**{doc_type_label}:** {count}")
+
+        # --- Description Quality Stats ---
+        st.subheader("Description Quality")
+        stats = description_quality_stats(case)
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Detailed Descriptions", stats["detailed"])
+        col2.metric("Stub/Minimal", stats["stub"])
+        col3.metric("Empty", stats["empty"])
+        col4.metric("Quality", f"{stats['detailed_pct']:.0f}%")
+        if case.last_updated:
+            st.caption(f"Last updated: {case.last_updated}")
+
+        # --- PACER Docket Update ---
+        if config.has_pacer_credentials():
+            improvable = stats["stub"] + stats["empty"]
+            if improvable > 0:
+                st.info(
+                    f"{improvable} entries have minimal or empty descriptions. "
+                    "Updating the docket from PACER can improve search quality."
+                )
+            if st.session_state.show_pacer_confirm:
+                date_start, date_end = st.session_state.pacer_date_range
+                if date_start and date_end:
+                    scope_msg = (
+                        f"Purchase will be scoped to entries filed "
+                        f"**{date_start}** to **{date_end}** "
+                        f"({improvable} entries with poor descriptions)."
+                    )
+                else:
+                    scope_msg = (
+                        f"Date range could not be determined — "
+                        f"purchasing the **full docket** ({improvable} entries "
+                        f"with poor descriptions)."
+                    )
+                st.warning(
+                    f"{scope_msg}\n\n"
+                    "**PACER costs:** Docket sheets are billed at ~\\$0.10/page. "
+                    "Large cases may cost \\$5–\\$20+. Charges are non-refundable."
+                )
+                col_yes, col_no = st.columns(2)
+                with col_yes:
+                    if st.button("Confirm Purchase", type="primary", use_container_width=True):
+                        st.session_state.show_pacer_confirm = False
+                        _execute_pacer_update(case)
+                with col_no:
+                    if st.button("Cancel", use_container_width=True):
+                        st.session_state.show_pacer_confirm = False
+                        st.session_state.pacer_date_range = (None, None)
+                        st.rerun()
+            else:
+                if st.button("Update Docket from PACER", use_container_width=True):
+                    st.session_state.pacer_date_range = get_poor_description_date_range(case)
+                    st.session_state.show_pacer_confirm = True
+                    st.rerun()
+
+        # --- Indexing & Case Actions ---
+        st.subheader("Actions")
+        col1, col2 = st.columns(2)
+        with col1:
+            if is_indexed:
+                if st.button("Re-index", use_container_width=True):
+                    with st.spinner("Indexing documents..."):
+                        try:
+                            chunk_count = index.index_case(case)
+                            st.success(f"Indexed {chunk_count} chunks")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Indexing failed: {e}")
+                            logger.exception("Indexing failed")
+        with col2:
+            if st.button("Refresh from API", use_container_width=True):
+                with st.spinner("Re-fetching case from CourtListener..."):
+                    try:
+                        client = CourtListenerClient()
+                        refreshed = client.load_case(case.docket_id, fetch_text=True)
+                        save_case(refreshed)
+                        st.session_state.case = refreshed
+                        st.session_state.index = CaseIndex(case.docket_id)
+                        st.session_state.messages = []
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error refreshing case: {e}")
+                        logger.exception("Failed to refresh case")
+
+    # === Chat Area ===
     if is_indexed:
         st.divider()
-        st.subheader("Ask Questions")
-
-        # Optional doc type filter
-        filter_options = ["All document types"] + [dt.label for dt in DocType if dt != DocType.OTHER]
-        selected_filter = st.selectbox("Filter by document type (optional):", filter_options)
-
-        doc_type_filter = None
-        if selected_filter != "All document types":
-            # Reverse lookup from label to value
-            for dt in DocType:
-                if dt.label == selected_filter:
-                    doc_type_filter = dt.value
-                    break
 
         # Chat messages
         for msg in st.session_state.messages:
@@ -544,7 +551,6 @@ def _render_case_dashboard():
                     use_container_width=True,
                     disabled=len(selected) == 0,
                 ):
-                    # Store only the selected suggestions
                     st.session_state.pending_purchases["suggestions"] = selected
                     st.session_state.purchase_in_progress = True
                     st.rerun()
@@ -553,7 +559,7 @@ def _render_case_dashboard():
                     st.session_state.pending_purchases = None
                     st.rerun()
 
-        # Chat input
+        # Chat input — in main body so it pins to bottom
         if question := st.chat_input("Ask about this case..."):
             # Clear any pending purchase state from previous question
             st.session_state.pending_purchases = None
@@ -566,48 +572,52 @@ def _render_case_dashboard():
 
             # Generate answer
             with st.chat_message("assistant"):
-                with st.spinner("Searching documents and generating answer..."):
+                with st.status("Researching...", expanded=True) as status:
                     try:
                         result = query_case(
                             question=question,
                             case=case,
                             index=index,
                             doc_type_filter=doc_type_filter,
+                            progress=lambda msg: st.write(msg),
                         )
-                        st.markdown(_escape_dollars(result["answer"]))
-
-                        if result["sources"]:
-                            with st.expander("Sources"):
-                                for src in result["sources"]:
-                                    st.caption(
-                                        f"**{src['ecf_number']}** — "
-                                        f"{src['description'][:100]} "
-                                        f"({src['date_filed']})"
-                                    )
-
-                        # Save to history
-                        st.session_state.messages.append(
-                            {
-                                "role": "assistant",
-                                "content": result["answer"],
-                                "sources": result.get("sources", []),
-                            }
-                        )
-
-                        # Show purchase suggestions if available
-                        purchases = result.get("suggested_purchases", [])
-                        if purchases and config.has_pacer_credentials():
-                            st.session_state.pending_purchases = {
-                                "question": question,
-                                "suggestions": purchases,
-                                "doc_type_filter": doc_type_filter,
-                            }
-                            st.rerun()
-
+                        status.update(label="Answer ready", state="complete", expanded=False)
                     except Exception as e:
-                        error_msg = f"Error generating answer: {e}"
-                        st.error(error_msg)
+                        status.update(label="Error", state="error", expanded=False)
+                        st.error(f"Error generating answer: {e}")
                         logger.exception("Query failed")
+                        result = None
+
+                if result:
+                    st.markdown(_escape_dollars(result["answer"]))
+
+                    if result["sources"]:
+                        with st.expander("Sources"):
+                            for src in result["sources"]:
+                                st.caption(
+                                    f"**{src['ecf_number']}** — "
+                                    f"{src['description'][:100]} "
+                                    f"({src['date_filed']})"
+                                )
+
+                    # Save to history
+                    st.session_state.messages.append(
+                        {
+                            "role": "assistant",
+                            "content": result["answer"],
+                            "sources": result.get("sources", []),
+                        }
+                    )
+
+                    # Show purchase suggestions if available
+                    purchases = result.get("suggested_purchases", [])
+                    if purchases and config.has_pacer_credentials():
+                        st.session_state.pending_purchases = {
+                            "question": question,
+                            "suggestions": purchases,
+                            "doc_type_filter": doc_type_filter,
+                        }
+                        st.rerun()
 
 
 if __name__ == "__main__":

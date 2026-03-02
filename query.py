@@ -8,7 +8,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Callable, Optional
 
 import config
 from classifier import DocType, classify_document
@@ -452,6 +452,7 @@ def query_case(
     index: CaseIndex,
     doc_type_filter: Optional[str] = None,
     top_k: int = config.RETRIEVAL_TOP_K,
+    progress: Optional[Callable[[str], None]] = None,
 ) -> dict:
     """Run a full RAG query against a bankruptcy case.
 
@@ -470,6 +471,9 @@ def query_case(
     Returns:
         Dict with keys: answer, sources, chunks_used
     """
+    _progress = progress or (lambda msg: None)
+
+    _progress("Classifying question...")
     intent = classify_question(question, case)
     logger.info(f"Question classified as '{intent.category}' (doc_type={intent.doc_type}, date_range={intent.date_range})")
 
@@ -479,8 +483,10 @@ def query_case(
     # literal keyword matching is too brittle for concepts like "hearings"
     # that may appear as "Status Conference", "Oral Argument", etc.
     if intent.category in ("docket_listing", "type_listing", "type_date_listing"):
+        _progress("Building structured listing...")
         listing = _build_structured_listing(case, intent)
 
+        _progress("Generating answer...")
         system_prompt = load_system_prompt(case)
         user_message = (
             f"Based on the following docket entry listing from this bankruptcy case, "
@@ -512,6 +518,7 @@ def query_case(
     desc_top_k = 40 if intent.category == "keyword_listing" else 20
 
     # Stage 1: find relevant entries via their descriptions
+    _progress("Searching docket descriptions...")
     desc_hits = index.query_descriptions(
         question=question,
         top_k=desc_top_k,
@@ -526,6 +533,7 @@ def query_case(
     })
 
     # Stage 2: search document chunks, scoped to the entries we found
+    _progress("Retrieving document passages...")
     if hit_entry_ids:
         doc_chunks = index.query_documents(
             question=question,
@@ -588,6 +596,7 @@ def query_case(
         f"**Retrieved Documents:**\n\n{context}"
     )
 
+    _progress("Generating answer...")
     raw_response = _call_llm(system_prompt, user_message)
 
     # Parse structured JSON output (answer + purchase suggestions)

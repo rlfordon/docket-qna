@@ -2,21 +2,28 @@
 
 ## Near-Term
 
-### PACER Document Purchase Flow
-When the system can't fully answer a question due to missing documents, offer to purchase the specific document from PACER, index it, and re-answer.
+### ~~PACER Document Purchase Flow~~ ✓ Done
+Implemented: LLM identifies description-only sources via structured JSON output, suggests specific documents to purchase. UI shows checkboxes for selective purchase, then fetches via CourtListener API, indexes incrementally, and re-answers.
 
-**Flow:** Answer with what's available → identify the gap → find the ECF number in `case.entries` → show estimated cost → user confirms → purchase via CourtListener API → index incrementally → re-run the question.
+### UX Improvements
 
-**Design decisions:**
-- User provides their own PACER login (`PACER_USERNAME`/`PACER_PASSWORD` in `.env`)
-- Most PACER documents are capped at $3 per document
-- Always show estimated cost and require confirmation before purchasing
-- After purchase + indexing, automatically re-run the question
+Findings from UX research (March 2026). Prioritized by impact.
 
-**Requires:**
-- Incremental indexing — `add_document()` method on `CaseIndex` that appends to the existing ChromaDB collection without rebuilding the whole index
-- Gap detection — parse the LLM's answer or use structured output to identify what document types are missing
-- Purchase confirmation UI in Streamlit
+**Quick wins:**
+- [x] ~~Split dashboard and chat~~ — Compact case header with collapsible "Case Details & Controls" expander; chat immediately below. Tried tabs but case overview was too hidden.
+- [x] Replace single spinner with `st.status` for multi-step RAG pipeline (classify → search descriptions → retrieve chunks → generate answer)
+- [x] Move doc type filter to sidebar + "Load Different Case" button to sidebar for case navigation
+- [ ] Show top 2-3 source cards inline below the answer; only use expander for full list when many sources
+
+**Medium effort:**
+- [ ] Stream LLM responses with `st.write_stream()` instead of spinner → full dump
+- [ ] Make ECF numbers in answers clickable (link to CourtListener document page)
+- [ ] Add per-answer coverage indicator ("Answer based on 8 sources — 5 full text, 3 description only")
+- [ ] Use `@st.cache_resource` for embedding model and ChromaDB client
+
+**Fixes:**
+- [ ] Work around `st.expander` disappearing inside `st.chat_message` on new submissions (known Streamlit bug) — show sources inline for latest message
+- [ ] Reduce excessive `st.rerun()` calls that cause flickering
 
 ### Question Classifier Improvements
 The regex-based classifier handles 84 test cases but has known limitations with novel phrasings. Options being evaluated:
