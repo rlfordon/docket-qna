@@ -608,11 +608,18 @@ def _render_chat(case: BankruptcyCase, index: CaseIndex, is_indexed: bool):
     # Show pending purchase suggestions (if any, from last answer)
     if st.session_state.pending_purchases and not st.session_state.purchase_in_progress:
         if config.DEMO_MODE:
-            st.caption(
-                "In the full version, you can purchase additional documents "
-                "directly from PACER to improve answers."
+            pending = st.session_state.pending_purchases
+            suggestions = pending["suggestions"]
+            st.markdown("**Documents that could improve this answer:**")
+            for s in suggestions:
+                st.markdown(f"- **ECF No. {s['ecf_number']}** — {s['reason']}")
+            st.info(
+                "In the full version, these documents can be purchased directly "
+                "from PACER and indexed to improve answers."
             )
-            st.session_state.pending_purchases = None
+            if st.button("Dismiss", key="demo_dismiss_purchases"):
+                st.session_state.pending_purchases = None
+                st.rerun()
         else:
             pending = st.session_state.pending_purchases
             suggestions = pending["suggestions"]
@@ -741,7 +748,7 @@ def _render_chat(case: BankruptcyCase, index: CaseIndex, is_indexed: bool):
 
                 # Show purchase suggestions if available
                 purchases = result.get("suggested_purchases", [])
-                if purchases and config.has_pacer_credentials() and not config.DEMO_MODE:
+                if purchases and (config.has_pacer_credentials() or config.DEMO_MODE):
                     st.session_state.pending_purchases = {
                         "question": question,
                         "suggestions": purchases,

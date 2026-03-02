@@ -386,8 +386,8 @@ def load_system_prompt(case: BankruptcyCase) -> str:
     else:
         template = DEFAULT_SYSTEM_PROMPT
 
-    # Include purchase suggestion instructions only when PACER creds are configured
-    purchase_block = _PURCHASE_SUGGESTION_INSTRUCTIONS if config.has_pacer_credentials() else ""
+    # Include purchase suggestion instructions when PACER creds are configured or in demo mode
+    purchase_block = _PURCHASE_SUGGESTION_INSTRUCTIONS if (config.has_pacer_credentials() or config.DEMO_MODE) else ""
 
     format_kwargs = dict(
         case_name=case.case_name,
@@ -607,7 +607,7 @@ def query_case(
     raw_response = _call_llm(system_prompt, user_message)
 
     # Parse structured JSON output (answer + purchase suggestions)
-    if config.has_pacer_credentials():
+    if config.has_pacer_credentials() or config.DEMO_MODE:
         answer, suggested_purchases = _parse_llm_response(raw_response)
     else:
         answer = raw_response
