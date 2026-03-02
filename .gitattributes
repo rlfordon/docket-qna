@@ -1,0 +1,2 @@
+data-demo/chroma/** filter=lfs diff=lfs merge=lfs -text
+data-demo/cases/*.json filter=lfs diff=lfs merge=lfs -text
