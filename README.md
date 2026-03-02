@@ -2,19 +2,108 @@
 
 **An open-source AI-powered tool for querying bankruptcy case documents using Free Law Project's RECAP Archive.**
 
-Ask natural language questions about any federal bankruptcy case — "When was the disclosure statement filed?", "Summarize all objections to the plan", "Make me a table of fee applications with amounts requested" — powered by documents freely available through the RECAP Archive and CourtListener API.
+**[Try the live demo →](https://bankruptcy-docket-qanda.onrender.com)**
 
-## Why This Exists
+Ask natural language questions about any federal bankruptcy case — powered by documents freely available through the RECAP Archive and CourtListener API.
 
-Bankruptcy cases generate massive dockets. A large Chapter 11 can have thousands of entries, and practitioners, creditors, journalists, and researchers routinely waste hours navigating them. Existing tools either:
+## What You Can Do
 
-- **Provide access but not intelligence** (PACER, CourtListener, PacerPro) — you can find and download documents, but you still have to read everything yourself
-- **Provide AI but not for per-case docket Q&A** (Harvey, Octus/Reorg, CoCounsel) — they focus on legal research, deal terms, or document drafting, not interrogating a specific case's filings
-- **Are extremely expensive** (Bloomberg Law, Octus) — enterprise pricing for hedge funds and BigLaw
+Load a bankruptcy case docket into the tool and ask questions like:
 
-This tool fills the gap: **free, open-source, per-case AI document intelligence** built on top of the public RECAP Archive.
+- "When was the disclosure statement filed?"
+- "Summarize all objections to the plan"
+- "Make me a table of fee applications with amounts requested"
+- "What are the key terms of the DIP facility?"
+- "Which creditors filed proofs of claim over $1 million?"
+
+You get answers grounded in the actual filings, with citations to specific ECF docket entry numbers — so you can verify everything.
 
 ## How It Works
+
+1. **Load a case** — Enter a CourtListener URL or court + docket number. The tool pulls the full docket and all available document text from the RECAP Archive.
+2. **Ask questions** — Type natural language questions in the chat interface. The tool automatically finds the most relevant filings and extracts what you need.
+3. **Get cited answers** — Every answer references specific ECF numbers. When document coverage is incomplete, the tool tells you.
+
+## Key Features
+
+- **Full docket coverage stats** — See exactly how many entries have documents available ("342 of 1,208 entries have documents in RECAP")
+- **Document type filtering** — Browse filings by category: motions, objections, orders, plans, claims, fee applications, and more
+- **Smart retrieval** — The tool routes your question to the best search strategy, whether that's filtering by date/type or deep semantic search across document text
+- **Structured output** — Ask for tables, timelines, or summaries and get formatted results
+- **PACER integration (optional)** — Purchase missing documents directly through the tool; every purchase enriches the public RECAP Archive
+- **BYOK (Bring Your Own Key)** — Works with Anthropic Claude or OpenAI GPT models; you control cost and quality
+
+## Cost Estimates
+
+| Component | Cost |
+|-----------|------|
+| Indexing (FLP model, default) | $0.00 |
+| Indexing (OpenAI embeddings, large case) | ~$0.12 |
+| Q&A queries (Claude Haiku) | ~$0.003/question |
+| Q&A queries (Claude Sonnet) | ~$0.02/question |
+| Q&A queries (GPT-4o) | ~$0.01/question |
+| PACER document purchase (optional) | $0.10/page, $3.00 cap |
+| PACER transcript purchase (optional) | $0.10/page, **no cap** |
+
+A power user could index a large case and ask 50 questions for well under $1.
+
+## Expanding Coverage (Free)
+
+The RECAP Archive is crowdsourced. You can help populate it:
+
+### For attorneys appearing in the case:
+Set up @recap.email as your "first look" notification email in PACER/ECF. Every filing you receive will be automatically contributed to RECAP — free for you, free for everyone.
+
+1. Log into your CourtListener account
+2. Find your unique @recap.email address in settings
+3. Add it as a secondary notification email in your PACER ECF account
+4. That's it — documents flow in automatically
+
+### For anyone with PACER credentials:
+Use this tool's built-in PACER purchase feature to buy specific documents or the full docket sheet. Documents purchased through CourtListener's API are automatically added to RECAP.
+
+---
+
+## Setup & Installation
+
+### Prerequisites
+- Python 3.10+
+- A CourtListener API token (free: https://www.courtlistener.com/sign-in/)
+- An LLM API key (Anthropic or OpenAI)
+
+### Install
+```bash
+git clone https://github.com/rlfordon/docket-qna.git
+cd docket-qna
+pip install -r requirements.txt
+```
+
+### Configure
+```bash
+cp .env.example .env
+# Edit .env with your API keys:
+#   COURTLISTENER_API_TOKEN=your_token_here
+#   ANTHROPIC_API_KEY=your_key_here    # or OPENAI_API_KEY
+#   EMBEDDING_PROVIDER=flp             # or "openai"
+#   LLM_PROVIDER=anthropic             # or "openai"
+#   LLM_MODEL=claude-haiku-4-5-20251001  # or claude-sonnet-4-5-20250929, gpt-4o, etc.
+```
+
+### Run
+```bash
+streamlit run app.py
+```
+
+### Usage
+
+1. **Load a case:** Enter a CourtListener docket URL or case identifier
+2. **Review coverage:** See which documents are available and which are missing
+3. **Index:** Click "Index Case" to embed all available documents (takes 1-5 min for a large case)
+4. **Ask questions** — see examples above
+
+## Architecture & Technical Details
+
+### Pipeline Overview
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -79,34 +168,6 @@ This tool fills the gap: **free, open-source, per-case AI document intelligence*
 │                        For purchasing missing docs            │
 └──────────────────────────────────────────────────────────────┘
 ```
-
-## Key Features
-
-### Case Loading & Dashboard
-- Enter a CourtListener docket URL, or court + docket number
-- Pull full docket metadata and all available document text via API
-- Display coverage stats: "342 of 1,208 docket entries have documents in RECAP"
-- Categorize filings by type (motions, objections, orders, plans, claims, etc.)
-
-### Document Classification
-- Regex-based classifier for standard bankruptcy filing types
-- Categories: Motions, Objections, Orders, Plans/Disclosure Statements, Proofs of Claim, Fee Applications, Schedules/Statements, Monthly Operating Reports, Notices, Other
-- Enables filtered queries ("show me only objections to the plan")
-
-### Smart Query Routing
-- **Question classifier** detects intent and routes to the right retrieval strategy
-- **Structured listings** for date-range and doc-type questions — pulls directly from docket entries, no embedding search needed
-- **Two-stage retrieval** for keyword and analytical questions — searches docket descriptions first (full docket coverage), then pulls relevant document chunks for depth
-- Answers cite specific ECF docket entry numbers
-- Supports structured output requests ("make me a table of...")
-- Flags when document coverage is incomplete for a given question
-
-### RECAP Ecosystem Integration
-- Prompts users to set up @recap.email for automatic document contribution
-- Supports purchasing docket sheets and individual documents via CourtListener's PACER API
-- Every document acquired through the tool enriches the public RECAP Archive
-
-## Architecture Details
 
 ### CourtListener API Integration (`courtlistener.py`)
 
@@ -243,77 +304,6 @@ The system prompt is critical for answer quality. Key instructions:
 - Use correct bankruptcy terminology
 - When uncertain, say so rather than hallucinate
 
-## Setup & Installation
-
-### Prerequisites
-- Python 3.10+
-- A CourtListener API token (free: https://www.courtlistener.com/sign-in/)
-- An LLM API key (Anthropic or OpenAI)
-
-### Install
-```bash
-git clone https://github.com/rlfordon/docket-qna.git
-cd docket-qna
-pip install -r requirements.txt
-```
-
-### Configure
-```bash
-cp .env.example .env
-# Edit .env with your API keys:
-#   COURTLISTENER_API_TOKEN=your_token_here
-#   ANTHROPIC_API_KEY=your_key_here    # or OPENAI_API_KEY
-#   EMBEDDING_PROVIDER=flp             # or "openai"
-#   LLM_PROVIDER=anthropic             # or "openai"
-#   LLM_MODEL=claude-haiku-4-5-20251001  # or claude-sonnet-4-5-20250929, gpt-4o, etc.
-```
-
-### Run
-```bash
-streamlit run app.py
-```
-
-## Usage
-
-1. **Load a case:** Enter a CourtListener docket URL or case identifier
-2. **Review coverage:** See which documents are available and which are missing
-3. **Index:** Click "Index Case" to embed all available documents (takes 1-5 min for a large case)
-4. **Ask questions:**
-   - "When was the disclosure statement filed?"
-   - "What are the main arguments in the objections to the plan?"
-   - "Make me a table of all fee applications with applicant, amount requested, and date"
-   - "Summarize the debtor's first day motions"
-   - "Which creditors filed proofs of claim over $1 million?"
-
-## Expanding Coverage (Free)
-
-The RECAP Archive is crowdsourced. You can help populate it:
-
-### For attorneys appearing in the case:
-Set up @recap.email as your "first look" notification email in PACER/ECF. Every filing you receive will be automatically contributed to RECAP — free for you, free for everyone.
-
-1. Log into your CourtListener account
-2. Find your unique @recap.email address in settings
-3. Add it as a secondary notification email in your PACER ECF account
-4. That's it — documents flow in automatically
-
-### For anyone with PACER credentials:
-Use this tool's built-in PACER purchase feature to buy specific documents or the full docket sheet. Documents purchased through CourtListener's API are automatically added to RECAP.
-
-## Cost Estimates
-
-| Component | Cost |
-|-----------|------|
-| Indexing (FLP model, default) | $0.00 |
-| Indexing (OpenAI embeddings, large case) | ~$0.12 |
-| Q&A queries (Claude Haiku) | ~$0.003/question |
-| Q&A queries (Claude Sonnet) | ~$0.02/question |
-| Q&A queries (GPT-4o) | ~$0.01/question |
-| PACER document purchase (optional) | $0.10/page, $3.00 cap |
-| PACER transcript purchase (optional) | $0.10/page, **no cap** |
-
-A power user could index a large case and ask 50 questions for well under $1.
-
 ## Project Structure
 
 ```
@@ -346,7 +336,6 @@ This is an open-source proof of concept. Contributions welcome — see [ROADMAP.
 ## Acknowledgments
 
 - **[Free Law Project](https://free.law/)** — for RECAP, CourtListener, the API, the embedding model, and the mission
-- **[LegalQuants](https://legalquants.com/)** — community of lawyers and builders in legal AI
 - Built with data from the RECAP Archive. If this tool is useful to you, please [donate to Free Law Project](https://free.law/donate/) or [become a member](https://www.courtlistener.com/sign-in/).
 
 ## License
