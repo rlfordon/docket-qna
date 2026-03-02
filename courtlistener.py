@@ -528,6 +528,16 @@ class CourtListenerClient:
                 logger.info("PACER purchase completed successfully")
                 return data
 
+            # CourtListener sometimes leaves the status at "In Progress"
+            # even after the docket has been updated.  If we've been polling
+            # long enough, treat it as complete so we don't block the UI.
+            if status == 4 and elapsed > 30:
+                logger.warning(
+                    "PACER purchase still 'In Progress' after %.0fs — "
+                    "assuming complete", elapsed,
+                )
+                return data
+
             if status in terminal_failures:
                 label = status_labels.get(status, f"Unknown status {status}")
                 msg = data.get("message", "")
