@@ -171,6 +171,12 @@ def _render_sidebar_no_case():
     else:
         st.caption("No cached cases yet.")
 
+    # --- Footer ---
+    st.caption(
+        "Powered by [CourtListener](https://www.courtlistener.com/) · "
+        "[Open source](https://github.com/rlfordon/docket-qna)"
+    )
+
 
 def _render_sidebar_case_info(case: BankruptcyCase, index: CaseIndex, is_indexed: bool):
     """Sidebar content when a case is loaded — all case info and controls."""
@@ -296,8 +302,14 @@ def _render_sidebar_case_info(case: BankruptcyCase, index: CaseIndex, is_indexed
     # --- RECAP Promo ---
     st.caption(
         "📬 **Expand coverage for free** — set up "
-        "[@recap.email](https://free.law/recap/) as your "
+        "[@recap.email](https://www.courtlistener.com/help/recap/email/) as your "
         "ECF notification email."
+    )
+
+    # --- Footer ---
+    st.caption(
+        "Powered by [CourtListener](https://www.courtlistener.com/) · "
+        "[Open source](https://github.com/rlfordon/docket-qna)"
     )
 
 
