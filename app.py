@@ -1,4 +1,4 @@
-"""RECAP Bankruptcy Case Intelligence — Streamlit UI.
+"""Bankruptcy Docket Q&A — Streamlit UI.
 
 A browser-based interface for loading, indexing, and querying
 bankruptcy case documents from the RECAP Archive.
@@ -53,7 +53,7 @@ def _format_date(iso_string: str) -> str:
 
 # --- Page Config ---
 st.set_page_config(
-    page_title="RECAP Bankruptcy Case Intelligence",
+    page_title="Bankruptcy Docket Q&A",
     page_icon="⚖️",
     layout="wide",
 )
@@ -111,7 +111,7 @@ def _pacer_confirm_dialog(case: BankruptcyCase):
 
 
 def main():
-    st.title("⚖️ RECAP Bankruptcy Case Intelligence")
+    st.title("⚖️ Bankruptcy Docket Q&A")
     st.caption(
         "Ask natural language questions about any federal bankruptcy case — "
         "powered by the RECAP Archive and CourtListener API."
