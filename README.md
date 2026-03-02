@@ -309,7 +309,8 @@ Use this tool's built-in PACER purchase feature to buy specific documents or the
 | Q&A queries (Claude Haiku) | ~$0.003/question |
 | Q&A queries (Claude Sonnet) | ~$0.02/question |
 | Q&A queries (GPT-4o) | ~$0.01/question |
-| PACER docket purchase (optional) | $0.10/page, $3.00 cap |
+| PACER document purchase (optional) | $0.10/page, $3.00 cap |
+| PACER transcript purchase (optional) | $0.10/page, **no cap** |
 
 A power user could index a large case and ask 50 questions for well under $1.
 

@@ -17,13 +17,16 @@ Findings from UX research (March 2026). Prioritized by impact.
 
 **Medium effort:**
 - [ ] Stream LLM responses with `st.write_stream()` instead of spinner → full dump
-- [ ] Make ECF numbers in answers clickable (link to CourtListener document page)
+- [x] ~~Make ECF numbers in answers clickable (link to CourtListener document page)~~
 - [ ] Add per-answer coverage indicator ("Answer based on 8 sources — 5 full text, 3 description only")
 - [ ] Use `@st.cache_resource` for embedding model and ChromaDB client
 
 **Fixes:**
 - [ ] Work around `st.expander` disappearing inside `st.chat_message` on new submissions (known Streamlit bug) — show sources inline for latest message
 - [ ] Reduce excessive `st.rerun()` calls that cause flickering
+
+### Interactive Demo Mode
+Playable demo with preloaded cases and a bundled API key so visitors can try querying without setup. Cases ship pre-indexed with full document text. PACER purchase buttons show a friendly "this feature isn't available in the demo" message instead of hitting PACER. Goal: let people experience the Q&A flow end-to-end without needing their own API keys or CourtListener accounts.
 
 ### Question Classifier Improvements
 The regex-based classifier handles 84 test cases but has known limitations with novel phrasings. Options being evaluated:
@@ -32,6 +35,9 @@ The regex-based classifier handles 84 test cases but has known limitations with 
 - Expanding the regex test suite with real user questions (tracked in `tests/questions_from_users.md`)
 
 ## Medium-Term
+
+### Frontend Swap
+Streamlit has been good for prototyping but is hitting its limits — no clipboard access, limited control over layout, iframe sandboxing for custom JS, excessive reruns causing flicker. Evaluate replacing with a proper frontend framework (React/Next.js, or a lighter option like FastHTML) backed by a FastAPI service layer. Key requirements: chat UX with copy/export, clickable ECF links, streaming responses, and a responsive layout that doesn't fight the framework.
 
 ### Claims Register Parsing
 Structured extraction from proofs of claim — pull creditor names, amounts, claim types, and status into a queryable format. Would enable questions like "Which creditors filed claims over $1 million?" with precise answers.
