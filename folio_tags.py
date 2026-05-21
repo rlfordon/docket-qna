@@ -119,3 +119,43 @@ def tag_embedding(
     sims = embeddings @ vec  # (N_concepts,)
     order = np.argsort(-sims)[:top_n]
     return [concepts[int(j)].short_name for j in order if sims[int(j)] >= min_sim]
+
+
+def _embed_query(text: str) -> np.ndarray:
+    """Embed a single text via the same model the indexer uses.
+
+    Returns a (1, D) array. Separated as its own function so tests can
+    patch it without loading the real FLP model.
+    """
+    import indexer
+    vec = indexer.embed_texts([text], is_query=True)
+    return np.array(vec, dtype=np.float32)
+
+
+def tag_text(
+    text: str,
+    catalog_dir: Path | None = None,
+    top_n: int | None = None,
+    min_sim: float | None = None,
+) -> list[str]:
+    """Tag a free-text string with FOLIO concept short_names.
+
+    Convenience wrapper that embeds the text and calls tag_embedding.
+    Empty or whitespace-only input returns []. If the catalog is missing
+    or FOLIO_ENABLED is false, returns [].
+    """
+    import config
+    if not config.FOLIO_ENABLED or not text or not text.strip():
+        return []
+
+    concepts, embeddings = get_catalog(catalog_dir)
+    if not concepts:
+        return []
+
+    if top_n is None:
+        top_n = config.FOLIO_TOP_N_CONCEPTS
+    if min_sim is None:
+        min_sim = config.FOLIO_MIN_SIMILARITY
+
+    vec = _embed_query(text)[0]
+    return tag_embedding(vec, concepts, embeddings, top_n=top_n, min_sim=min_sim)

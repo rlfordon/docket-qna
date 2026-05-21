@@ -84,3 +84,34 @@ def test_tag_embedding_empty_catalog_returns_empty():
     vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
     tags = tag_embedding(vec, [], np.empty((0, 0), dtype=np.float32), top_n=5, min_sim=0.0)
     assert tags == []
+
+
+from unittest.mock import patch
+from folio_tags import tag_text
+
+
+def test_tag_text_embeds_then_tags(folio_catalog_dir, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "FOLIO_CATALOG_DIR", folio_catalog_dir)
+    # Mock the FLP embedder to return the automatic_stay vector
+    fake_vec = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32)
+
+    with patch("folio_tags._embed_query", return_value=fake_vec):
+        tags = tag_text(
+            "did the debtor lift the stay?",
+            catalog_dir=folio_catalog_dir,
+            top_n=1,
+            min_sim=0.5,
+        )
+
+    assert tags == ["automatic_stay"]
+
+
+def test_tag_text_empty_string_returns_empty(folio_catalog_dir):
+    tags = tag_text("", catalog_dir=folio_catalog_dir, top_n=5, min_sim=0.0)
+    assert tags == []
+
+
+def test_tag_text_whitespace_returns_empty(folio_catalog_dir):
+    tags = tag_text("   \n\t  ", catalog_dir=folio_catalog_dir, top_n=5, min_sim=0.0)
+    assert tags == []
