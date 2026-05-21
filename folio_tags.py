@@ -159,3 +159,18 @@ def tag_text(
 
     vec = _embed_query(text)[0]
     return tag_embedding(vec, concepts, embeddings, top_n=top_n, min_sim=min_sim)
+
+
+def format_for_llm(concepts_str: str) -> str:
+    """Render a pipe-delimited concepts string for inclusion in LLM context.
+
+    "" → ""
+    "automatic_stay" → "[Concepts: automatic_stay]"
+    "automatic_stay|adequate_protection" → "[Concepts: automatic_stay, adequate_protection]"
+    """
+    if not concepts_str:
+        return ""
+    parts = [p for p in concepts_str.split("|") if p]
+    if not parts:
+        return ""
+    return f"[Concepts: {', '.join(parts)}]"

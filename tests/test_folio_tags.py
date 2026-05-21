@@ -115,3 +115,24 @@ def test_tag_text_empty_string_returns_empty(folio_catalog_dir):
 def test_tag_text_whitespace_returns_empty(folio_catalog_dir):
     tags = tag_text("   \n\t  ", catalog_dir=folio_catalog_dir, top_n=5, min_sim=0.0)
     assert tags == []
+
+
+from folio_tags import format_for_llm
+
+
+def test_format_for_llm_renders_concepts():
+    assert format_for_llm("automatic_stay|adequate_protection") == \
+        "[Concepts: automatic_stay, adequate_protection]"
+
+
+def test_format_for_llm_empty_returns_empty_string():
+    assert format_for_llm("") == ""
+
+
+def test_format_for_llm_single_concept():
+    assert format_for_llm("proof_of_claim") == "[Concepts: proof_of_claim]"
+
+
+def test_format_for_llm_strips_empty_segments():
+    # Edge case: a stray trailing pipe shouldn't produce an empty label
+    assert format_for_llm("automatic_stay|") == "[Concepts: automatic_stay]"
