@@ -49,3 +49,38 @@ def test_load_catalog_row_order_matches_concepts(folio_catalog_dir):
     assert embeddings[0, 0] == 1.0
     assert embeddings[1, 1] == 1.0
     assert embeddings[2, 2] == 1.0
+
+
+from folio_tags import tag_embedding
+
+
+def test_tag_embedding_returns_top_match(folio_catalog_dir):
+    concepts, embeddings = load_catalog(folio_catalog_dir)
+    # Query vector identical to automatic_stay row → top match
+    vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    tags = tag_embedding(vec, concepts, embeddings, top_n=1, min_sim=0.5)
+    assert tags == ["automatic_stay"]
+
+
+def test_tag_embedding_respects_top_n(folio_catalog_dir):
+    concepts, embeddings = load_catalog(folio_catalog_dir)
+    # Equal-weight blend across all three: similarity ~0.577 each
+    vec = np.array([1.0, 1.0, 1.0, 0.0], dtype=np.float32)
+    vec /= np.linalg.norm(vec)
+    tags = tag_embedding(vec, concepts, embeddings, top_n=2, min_sim=0.4)
+    assert len(tags) == 2
+    assert set(tags) <= {"automatic_stay", "adequate_protection", "proof_of_claim"}
+
+
+def test_tag_embedding_drops_below_threshold(folio_catalog_dir):
+    concepts, embeddings = load_catalog(folio_catalog_dir)
+    # Orthogonal vector → similarity 0 to all
+    vec = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+    tags = tag_embedding(vec, concepts, embeddings, top_n=5, min_sim=0.1)
+    assert tags == []
+
+
+def test_tag_embedding_empty_catalog_returns_empty():
+    vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    tags = tag_embedding(vec, [], np.empty((0, 0), dtype=np.float32), top_n=5, min_sim=0.0)
+    assert tags == []

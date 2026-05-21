@@ -98,3 +98,24 @@ def get_catalog(catalog_dir: Path | None = None) -> tuple[list[Concept], np.ndar
     import config
     path = catalog_dir if catalog_dir is not None else config.FOLIO_CATALOG_DIR
     return _cached_catalog(str(path))
+
+
+def tag_embedding(
+    vec: np.ndarray,
+    concepts: list[Concept],
+    embeddings: np.ndarray,
+    top_n: int,
+    min_sim: float,
+) -> list[str]:
+    """Return short_names of the top-N concepts with cosine similarity >= min_sim.
+
+    Assumes `vec` and rows of `embeddings` are L2-normalized (FLP and our
+    fixture vectors satisfy this). If they aren't, this still produces a
+    sensible ranking, just not strictly cosine.
+    """
+    if not concepts or embeddings.size == 0:
+        return []
+
+    sims = embeddings @ vec  # (N_concepts,)
+    order = np.argsort(-sims)[:top_n]
+    return [concepts[int(j)].short_name for j in order if sims[int(j)] >= min_sim]
