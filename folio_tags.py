@@ -7,8 +7,16 @@ exposes match helpers used by indexer.py and query.py.
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
+from pathlib import Path
+
+import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -37,3 +45,56 @@ def slugify(label: str) -> str:
     lowered = label.lower().strip()
     underscored = _NONWORD_RE.sub("_", lowered).strip("_")
     return _SUFFIX_RE.sub("", underscored)
+
+
+def load_catalog(catalog_dir: Path) -> tuple[list[Concept], np.ndarray]:
+    """Load the FOLIO concept catalog from disk.
+
+    Reads concepts.json and concepts.npy from catalog_dir. Returns
+    (concepts, embeddings). Returns ([], np.empty((0, 0))) if either
+    file is missing — tagging then becomes a no-op.
+
+    Row order in embeddings matches concept order in concepts.json.
+    """
+    catalog_dir = Path(catalog_dir)
+    json_path = catalog_dir / "concepts.json"
+    npy_path = catalog_dir / "concepts.npy"
+
+    if not json_path.exists() or not npy_path.exists():
+        logger.warning(
+            f"FOLIO catalog not found at {catalog_dir}. "
+            f"Tagging will be a no-op. Run scripts/fetch_folio.py to build it."
+        )
+        return [], np.empty((0, 0), dtype=np.float32)
+
+    with open(json_path) as f:
+        raw = json.load(f)
+
+    concepts = [Concept(**entry) for entry in raw]
+    embeddings = np.load(npy_path).astype(np.float32)
+
+    if embeddings.shape[0] != len(concepts):
+        logger.error(
+            f"FOLIO catalog mismatch: {len(concepts)} concepts vs "
+            f"{embeddings.shape[0]} embedding rows. Returning empty catalog."
+        )
+        return [], np.empty((0, 0), dtype=np.float32)
+
+    return concepts, embeddings
+
+
+@lru_cache(maxsize=1)
+def _cached_catalog(catalog_dir_str: str) -> tuple[list[Concept], np.ndarray]:
+    """Internal cache so indexer/query don't re-read on every call."""
+    return load_catalog(Path(catalog_dir_str))
+
+
+def get_catalog(catalog_dir: Path | None = None) -> tuple[list[Concept], np.ndarray]:
+    """Module-level cached catalog accessor.
+
+    Use this from indexer.py and query.py; tests should call load_catalog()
+    directly with a fixture path.
+    """
+    import config
+    path = catalog_dir if catalog_dir is not None else config.FOLIO_CATALOG_DIR
+    return _cached_catalog(str(path))

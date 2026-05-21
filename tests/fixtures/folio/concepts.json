@@ -1,0 +1,35 @@
+[
+  {
+    "iri": "TEST_AS",
+    "short_name": "automatic_stay",
+    "label": "Automatic Stay",
+    "alt_labels": ["Stay", "Bankruptcy Stay"],
+    "definition": "Injunction halting collection.",
+    "embed_text": "Automatic Stay. Stay. Bankruptcy Stay. Injunction halting collection.",
+    "parent_iri": "",
+    "children_iris": [],
+    "depth": 1
+  },
+  {
+    "iri": "TEST_AP",
+    "short_name": "adequate_protection",
+    "label": "Adequate Protection",
+    "alt_labels": [],
+    "definition": "Safeguards for secured creditors.",
+    "embed_text": "Adequate Protection. Safeguards for secured creditors.",
+    "parent_iri": "",
+    "children_iris": [],
+    "depth": 1
+  },
+  {
+    "iri": "TEST_PC",
+    "short_name": "proof_of_claim",
+    "label": "Proof of Claim",
+    "alt_labels": [],
+    "definition": "Creditor's claim document.",
+    "embed_text": "Proof of Claim. Creditor's claim document.",
+    "parent_iri": "",
+    "children_iris": [],
+    "depth": 1
+  }
+]
