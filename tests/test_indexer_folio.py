@@ -104,3 +104,35 @@ def test_index_case_no_concepts_when_disabled(patched_chroma, folio_catalog_dir,
 
     metadatas = patched_chroma.add.call_args_list[0].kwargs["metadatas"]
     assert all(m.get("concepts", "") == "" for m in metadatas)
+
+
+def test_index_single_document_tags_chunks(patched_chroma, folio_catalog_dir, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "FOLIO_ENABLED", True)
+    monkeypatch.setattr(config, "FOLIO_CATALOG_DIR", folio_catalog_dir)
+    monkeypatch.setattr(config, "FOLIO_TOP_N_CONCEPTS", 2)
+    monkeypatch.setattr(config, "FOLIO_MIN_SIMILARITY", 0.4)
+
+    import indexer
+    monkeypatch.setattr(
+        indexer, "embed_texts",
+        lambda texts, is_query=False: [[0.0, 1.0, 0.0, 0.0] for _ in texts],
+    )
+
+    # Reset collection.add call history
+    patched_chroma.add.reset_mock()
+
+    # get_collection should also return our patched collection
+    from indexer import CaseIndex
+    case = _make_case()
+    idx = CaseIndex(case.docket_id)
+    idx.client.get_collection = MagicMock(return_value=patched_chroma)
+
+    entry = case.entries[0]
+    doc = entry.documents[0]
+    idx.index_single_document(case, entry, doc)
+
+    metadatas = patched_chroma.add.call_args.kwargs["metadatas"]
+    assert all("concepts" in m for m in metadatas)
+    # The [0,1,0,0] embedding matches adequate_protection in the fixture
+    assert any("adequate_protection" in m["concepts"] for m in metadatas)

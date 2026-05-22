@@ -347,6 +347,8 @@ class CaseIndex:
         logger.info(f"Indexing {len(all_chunks)} chunks from document {doc.id}...")
         embeddings = embed_texts(all_chunks, is_query=False)
 
+        _attach_folio_tags(all_metadatas, embeddings)
+
         collection.add(
             ids=all_ids,
             embeddings=embeddings,
