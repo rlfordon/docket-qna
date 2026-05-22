@@ -447,6 +447,31 @@ def load_system_prompt(case: BankruptcyCase) -> str:
         return result
 
 
+def format_chunk_for_llm(chunk: dict, source_index: int) -> str:
+    """Render one retrieved chunk as a labeled block for the LLM context.
+
+    Preserves the existing header format and appends `[Concepts: ...]` when
+    the chunk has FOLIO concept tags. Empty tags produce no annotation.
+    """
+    meta = chunk["metadata"]
+    ecf = meta.get("ecf_number", "Unknown")
+    desc = meta.get("description", "")[:200]
+    date = meta.get("date_filed", "Unknown date")
+    doc_type = meta.get("doc_type", "other")
+    chunk_info = f"(chunk {meta.get('chunk_index', 0) + 1}/{meta.get('total_chunks', 1)})"
+
+    source = meta.get("source", "document")
+    desc_tag = " (DESCRIPTION ONLY — no document text available)" if source == "docket_entry" else ""
+
+    header = f"[Source {source_index}: {ecf} | {doc_type} | {date} | {desc}{desc_tag} {chunk_info}]"
+
+    concepts_annot = folio_tags.format_for_llm(meta.get("concepts", ""))
+    if concepts_annot:
+        header = f"{header} {concepts_annot}"
+
+    return f"{header}\n{chunk['text']}"
+
+
 def format_context(chunks: list[dict]) -> str:
     """Format retrieved chunks into context for the LLM.
 
@@ -463,18 +488,8 @@ def format_context(chunks: list[dict]) -> str:
     seen_entries = set()
 
     for i, chunk in enumerate(chunks, 1):
+        context_parts.append(format_chunk_for_llm(chunk, source_index=i))
         meta = chunk["metadata"]
-        ecf = meta.get("ecf_number", "Unknown")
-        desc = meta.get("description", "")[:200]
-        date = meta.get("date_filed", "Unknown date")
-        doc_type = meta.get("doc_type", "other")
-        chunk_info = f"(chunk {meta.get('chunk_index', 0)+1}/{meta.get('total_chunks', 1)})"
-
-        source = meta.get("source", "document")
-        desc_tag = " (DESCRIPTION ONLY — no document text available)" if source == "docket_entry" else ""
-        header = f"[Source {i}: {ecf} | {doc_type} | {date} | {desc}{desc_tag} {chunk_info}]"
-        context_parts.append(f"{header}\n{chunk['text']}")
-
         seen_entries.add(meta.get("entry_number", 0))
 
     return "\n\n---\n\n".join(context_parts)
