@@ -11,11 +11,45 @@ from datetime import datetime, timedelta
 from typing import Callable, Optional
 
 import config
+import folio_tags
 from classifier import DocType, classify_document
 from indexer import CaseIndex
 from courtlistener import BankruptcyCase
 
 logger = logging.getLogger(__name__)
+
+
+def rerank_by_concepts(
+    chunks: list[dict],
+    query_tags: list[str],
+    alpha: float | None = None,
+    k: int | None = None,
+) -> list[dict]:
+    """Re-rank ChromaDB results by combining vector similarity with FOLIO
+    concept overlap.
+
+    Each chunk's `combined` score is:
+        (1 - alpha) * (1 - distance) + alpha * (|query_tags ∩ chunk_tags| / |query_tags|)
+
+    Returns the top-k chunks by combined score. If query_tags is empty,
+    returns chunks unchanged (truncated to k).
+    """
+    if alpha is None:
+        alpha = config.FOLIO_RERANK_ALPHA
+    if k is None:
+        k = config.RETRIEVAL_TOP_K
+
+    if not query_tags:
+        return chunks[:k]
+
+    qset = set(query_tags)
+    for c in chunks:
+        c_tags = set((c.get("metadata") or {}).get("concepts", "").split("|")) - {""}
+        overlap = len(qset & c_tags) / len(qset) if qset else 0.0
+        vector_score = 1.0 - float(c.get("distance", 0.0))
+        c["combined"] = (1.0 - alpha) * vector_score + alpha * overlap
+
+    return sorted(chunks, key=lambda c: -c["combined"])[:k]
 
 
 # ---------------------------------------------------------------------------
@@ -477,6 +511,9 @@ def query_case(
     _progress = progress or (lambda msg: None)
 
     _progress("Classifying question...")
+    query_tags = folio_tags.tag_text(question) if config.FOLIO_ENABLED else []
+    if query_tags:
+        logger.info(f"Query tagged with FOLIO concepts: {query_tags}")
     intent = classify_question(question, case)
     logger.info(f"Question classified as '{intent.category}' (doc_type={intent.doc_type}, date_range={intent.date_range})")
 
@@ -530,7 +567,7 @@ def query_case(
 
     if descriptions_only:
         # Skip document chunk retrieval — use description hits directly
-        all_chunks = desc_hits
+        all_chunks = rerank_by_concepts(desc_hits, query_tags, k=top_k)
     else:
         # Collect entry IDs from the description hits for stage 2
         hit_entry_ids = list({
@@ -544,7 +581,7 @@ def query_case(
         if hit_entry_ids:
             doc_chunks = index.query_documents(
                 question=question,
-                top_k=top_k,
+                top_k=top_k * 2 if query_tags else top_k,
                 doc_type_filter=effective_type_filter,
                 entry_ids=hit_entry_ids,
             )
@@ -557,7 +594,7 @@ def query_case(
             remaining = top_k - len(doc_chunks)
             fallback_chunks = index.query_documents(
                 question=question,
-                top_k=remaining,
+                top_k=remaining * 2 if query_tags else remaining,
                 doc_type_filter=effective_type_filter,
             )
             # Deduplicate by chunk text
@@ -578,6 +615,7 @@ def query_case(
 
         # Put doc chunks first (richer content), then unique description hits
         all_chunks = doc_chunks + unique_desc_hits
+        all_chunks = rerank_by_concepts(all_chunks, query_tags, k=top_k)
 
     if not all_chunks:
         return {
