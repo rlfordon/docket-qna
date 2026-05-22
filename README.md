@@ -89,6 +89,18 @@ cp .env.example .env
 #   LLM_MODEL=claude-haiku-4-5-20251001  # or claude-sonnet-4-5-20250929, gpt-4o, etc.
 ```
 
+### FOLIO concept tagging (optional)
+
+The app uses the [FOLIO](https://openlegalstandard.org/) legal ontology to tag indexed chunks with substantive bankruptcy concepts (Automatic Stay, Adequate Protection, etc.). Tags improve retrieval and let the LLM use precise terminology.
+
+To enable, build the local catalog once:
+
+    python scripts/fetch_folio.py
+
+This writes `data/folio/concepts.json` and `data/folio/concepts.npy`. Re-run to refresh.
+
+If the catalog is missing, tagging is automatically a no-op and the app still works. To disable explicitly, set `FOLIO_ENABLED=false` in your `.env`.
+
 ### Run
 ```bash
 streamlit run app.py

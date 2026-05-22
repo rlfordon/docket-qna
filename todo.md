@@ -155,3 +155,18 @@ Three improvements to retrieval quality based on review of the current pipeline 
 1. **Chunk overlap** (5 min) — config change, immediate benefit
 2. **Hybrid search** (2-4 hrs) — biggest retrieval quality improvement
 3. **Document summaries** (1-2 hrs) — helps broad/analytical questions
+
+---
+
+## FOLIO concept tagging
+
+- [x] Spec: docs/superpowers/specs/2026-05-21-folio-concept-tagging-design.md
+- [x] Plan: docs/superpowers/plans/2026-05-21-folio-concept-tagging.md
+- [x] Implemented (this plan)
+
+### Follow-ups after first real-case eval
+- Calibrate FOLIO_MIN_SIMILARITY against tag quality on 1–2 real cases.
+- Calibrate FOLIO_RERANK_ALPHA after qualitative review of re-ranking impact.
+- Consider pulling doc-artifact subtree if retrieval improvement is real.
+- Add OPINION DocType to classifier.py to better separate orders/opinions/pleadings.
+- UI multi-select for concept filtering (deferred).
