@@ -117,44 +117,16 @@ Three improvements to retrieval quality based on review of the current pipeline 
 
 ---
 
-## 3. Increase Chunk Overlap — Quick Win
+## 3. Increase Chunk Overlap — DONE (2026-05-23)
 
-**Problem:** Current overlap is 50 tokens (~10% of 512-token chunks). Legal arguments and clauses frequently span chunk boundaries, causing relevant passages to get split across two chunks where neither scores high enough alone.
-
-**Solution:** Increase default overlap to 100 tokens (~20%).
-
-### Implementation Plan
-
-**Files to change:** `config.py`, `CLAUDE.md`
-
-1. In `config.py` line 45, change:
-   ```python
-   CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "100"))  # was 50
-   ```
-
-2. Update `CLAUDE.md` Environment Variables table:
-   ```
-   | `CHUNK_OVERLAP` | `100` | Overlap tokens between chunks |
-   ```
-
-3. Update the Key Patterns section in `CLAUDE.md`:
-   ```
-   - Chunk metadata includes ... (512-token target, 100-token overlap)
-   ```
-
-### Caveats
-- Existing indexed cases will still use old 50-token overlap until re-indexed
-- Increases index size by ~10% (more chunks due to smaller step size)
-- Users can still override via `CHUNK_OVERLAP` env var
-- Consider adding a note in the UI or logs when re-indexing is recommended after config changes
+Default `CHUNK_OVERLAP` bumped from 50 → 100 tokens in `config.py`; docs updated. Existing indexed cases still use 50-token overlap until re-indexed — consider surfacing a re-index hint in the UI/logs after config changes.
 
 ---
 
 ## Priority Order
 
-1. **Chunk overlap** (5 min) — config change, immediate benefit
-2. **Hybrid search** (2-4 hrs) — biggest retrieval quality improvement
-3. **Document summaries** (1-2 hrs) — helps broad/analytical questions
+1. **Hybrid search** (2-4 hrs) — biggest retrieval quality improvement
+2. **Document summaries** (1-2 hrs) — helps broad/analytical questions
 
 ---
 

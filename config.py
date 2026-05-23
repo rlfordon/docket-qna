@@ -42,7 +42,7 @@ OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 
 # --- RAG Settings ---
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "512"))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "100"))
 RETRIEVAL_TOP_K = int(os.getenv("RETRIEVAL_TOP_K", "12"))
 
 # --- Paths ---

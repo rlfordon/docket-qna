@@ -20,7 +20,7 @@ RAG pipeline: **Fetch → Classify → Index → Query**
 
 - **courtlistener.py** — API client for CourtListener REST API (v3/v4). Dataclasses: `RecapDocument`, `DocketEntry`, `BankruptcyCase`. Handles pagination, rate limiting (5000 req/hr), and optional PACER purchases. `get_purchasable_for_entries()` looks up recap document IDs for entries (queries API when no local records exist). PACER docket date params use `de_date_start`/`de_date_end` (not `date_start`/`date_end`).
 - **classifier.py** — Regex-based document type classification into `DocType` enum (11 types: Motion, Objection, Order, Plan, Claim, etc.). Pattern matching is ordered most-specific-first.
-- **indexer.py** — Chunks documents (512-token target, 50-token overlap), embeds via FLP ModernBERT (default, free, local) or OpenAI, stores in ChromaDB. `CaseIndex` class manages the vector store lifecycle. Two content pools: document chunks (`source: "document"`) and docket entry descriptions (`source: "docket_entry"`). Methods: `query()`, `query_descriptions()`, `query_documents()`, `index_single_document()` (incremental). FLP model uses `search_document:` / `search_query:` prefixes.
+- **indexer.py** — Chunks documents (512-token target, 100-token overlap), embeds via FLP ModernBERT (default, free, local) or OpenAI, stores in ChromaDB. `CaseIndex` class manages the vector store lifecycle. Two content pools: document chunks (`source: "document"`) and docket entry descriptions (`source: "docket_entry"`). Methods: `query()`, `query_descriptions()`, `query_documents()`, `index_single_document()` (incremental). FLP model uses `search_document:` / `search_query:` prefixes.
 - **query.py** — Question intent classification (`classify_question()` → `QuestionIntent`) and smart retrieval routing. Structured listings for date/type queries; two-stage retrieval (descriptions → document chunks) for keyword and analytical queries. Calls LLM (Anthropic Claude or OpenAI GPT), returns answer with source tracking. When PACER creds are configured, requests structured JSON output from LLM with `suggested_purchases` for description-only sources. `_parse_llm_response()` handles JSON extraction with fallback (pure JSON, fenced, prose+JSON, plain text). `query_case()` accepts optional `progress` callback for UI status updates.
 - **config.py** — All configuration via environment variables with `python-dotenv`. Provider selection for embeddings and LLM.
 - **app.py** — Streamlit UI with session state for case data, index, and chat history. Case caching to `data/cases/`. Layout: compact case header with collapsible "Case Details & Controls" expander, chat area below. Doc type filter and case navigation in sidebar. Purchase suggestion UI with per-document checkboxes. `_escape_dollars()` prevents Streamlit LaTeX rendering of `$` signs. `st.status` shows multi-step RAG pipeline progress.
@@ -48,7 +48,7 @@ RAG pipeline: **Fetch → Classify → Index → Query**
 | `LLM_PROVIDER` | `anthropic` | `anthropic` or `openai` |
 | `LLM_MODEL` | `claude-haiku-4-5-20251001` | Any supported model ID |
 | `CHUNK_SIZE` | `512` | Target tokens per chunk |
-| `CHUNK_OVERLAP` | `50` | Overlap tokens between chunks |
+| `CHUNK_OVERLAP` | `100` | Overlap tokens between chunks |
 | `RETRIEVAL_TOP_K` | `12` | Number of chunks retrieved per query |
 
 ## Dependencies

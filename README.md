@@ -236,7 +236,7 @@ Ambiguous entries fall through to "other." Future enhancement: LLM-based classif
 This separation enables two-stage retrieval: search descriptions for breadth (full docket coverage), then pull document chunks for depth.
 
 **Chunking strategy:**
-- Documents are split into ~512-token chunks with 50-token overlap
+- Documents are split into ~512-token chunks with 100-token overlap
 - Short documents (< 512 tokens) are kept as a single chunk
 
 **Each chunk stores metadata:**
