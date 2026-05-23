@@ -100,6 +100,16 @@ def get_catalog(catalog_dir: Path | None = None) -> tuple[list[Concept], np.ndar
     return _cached_catalog(str(path))
 
 
+def clear_cache() -> None:
+    """Invalidate the cached catalog so the next get_catalog() re-reads from disk.
+
+    Call this after rewriting concepts.json / concepts.npy (e.g. at the
+    end of scripts/fetch_folio.py) so long-running processes pick up the
+    new catalog without a restart.
+    """
+    _cached_catalog.cache_clear()
+
+
 def _l2_normalize_rows(arr: np.ndarray) -> np.ndarray:
     """Return a copy of arr with each row L2-normalized to unit length.
 

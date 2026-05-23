@@ -196,3 +196,39 @@ def test_format_for_llm_single_concept():
 def test_format_for_llm_strips_empty_segments():
     # Edge case: a stray trailing pipe shouldn't produce an empty label
     assert format_for_llm("automatic_stay|") == "[Concepts: automatic_stay]"
+
+
+def test_clear_cache_forces_disk_reread(tmp_path, folio_catalog_dir):
+    """Fix #4: After rebuilding the catalog on disk, clear_cache() must
+    cause the next get_catalog() to pick up the new contents.
+    """
+    import json
+    import shutil
+    from folio_tags import get_catalog, clear_cache
+
+    # Copy fixture to a writable tmp dir so we can mutate it
+    work = tmp_path / "folio"
+    shutil.copytree(folio_catalog_dir, work)
+
+    # First read populates the cache
+    concepts1, _ = get_catalog(work)
+    assert len(concepts1) == 3
+
+    # Overwrite concepts.json with a single-concept catalog
+    (work / "concepts.json").write_text(json.dumps([{
+        "iri": "ONE", "short_name": "only_one", "label": "Only One",
+        "alt_labels": [], "definition": "", "embed_text": "",
+        "parent_iri": "", "children_iris": [], "depth": 1,
+    }]))
+    # Rebuild matching npy: 1 row, 4-d (matches existing fixture width)
+    np.save(work / "concepts.npy", np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32))
+
+    # Without clear_cache, we'd still see the old 3-concept catalog
+    concepts_stale, _ = get_catalog(work)
+    assert len(concepts_stale) == 3, "Sanity check: cache should still hold old"
+
+    # After clear_cache, we read the new single-concept catalog
+    clear_cache()
+    concepts_fresh, _ = get_catalog(work)
+    assert len(concepts_fresh) == 1
+    assert concepts_fresh[0].short_name == "only_one"

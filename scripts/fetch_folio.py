@@ -24,6 +24,7 @@ import numpy as np
 import requests
 
 import config
+import folio_tags
 import indexer  # for embed_texts
 from folio_tags import Concept, slugify
 
@@ -159,6 +160,11 @@ def main() -> int:
 
     logger.info(f"Wrote {json_path} ({len(concepts)} concepts)")
     logger.info(f"Wrote {npy_path} shape={arr.shape}")
+
+    # Invalidate the in-memory cache so any long-running process that
+    # imports folio_tags picks up the fresh catalog on the next call.
+    folio_tags.clear_cache()
+    logger.info("Cleared in-memory FOLIO catalog cache.")
     return 0
 
 
