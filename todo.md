@@ -164,6 +164,13 @@ Three improvements to retrieval quality based on review of the current pipeline 
 - [x] Plan: docs/superpowers/plans/2026-05-21-folio-concept-tagging.md
 - [x] Implemented (this plan)
 
+### Branch cleanup
+- [ ] Delete merged feature branch `claude/quizzical-thompson-949184` (merged into master via ff80853). The branch couldn't be deleted because the worktree at `.claude/worktrees/quizzical-thompson-949184` was still active. Once that worktree is gone, run from the main repo root:
+  ```
+  git branch -d claude/quizzical-thompson-949184
+  git worktree prune  # if any stale registration remains
+  ```
+
 ### Follow-ups after first real-case eval
 - Calibrate FOLIO_MIN_SIMILARITY against tag quality on 1–2 real cases.
 - Calibrate FOLIO_RERANK_ALPHA after qualitative review of re-ranking impact.

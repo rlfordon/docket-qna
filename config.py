@@ -50,8 +50,7 @@ PROJECT_ROOT = Path(__file__).parent
 DATA_DIR = PROJECT_ROOT / "data"
 CHROMA_DIR = DATA_DIR / "chroma"
 CASES_DIR = DATA_DIR / "cases"
-PROMPTS_DIR = PROJECT_ROOT / "prompts"
-SYSTEM_PROMPT_PATH = PROMPTS_DIR / "system_prompt.txt"
+SYSTEM_PROMPT_PATH = PROJECT_ROOT / "system_prompt.txt"
 
 # Ensure directories exist
 DATA_DIR.mkdir(exist_ok=True)

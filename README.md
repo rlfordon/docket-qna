@@ -307,7 +307,7 @@ User question
 - Anthropic Claude (Haiku for cost efficiency, Sonnet for quality)
 - OpenAI GPT-4o / GPT-4o-mini
 
-### System Prompt (`prompts/system_prompt.txt`)
+### System Prompt (`system_prompt.txt`)
 
 The system prompt is critical for answer quality. Key instructions:
 - Answer based ONLY on indexed documents from this case
@@ -332,8 +332,7 @@ docket-qna/
 ├── indexer.py             # Chunking, embedding, vector store
 ├── query.py               # Question classifier + RAG retrieval + LLM Q&A
 ├── app.py                 # Streamlit UI
-├── prompts/
-│   └── system_prompt.txt  # LLM system prompt for Q&A
+├── system_prompt.txt      # LLM system prompt for Q&A
 ├── tests/
 │   ├── test_question_classifier.py  # 84-case classifier test suite
 │   ├── test_llm_classifier.py       # LLM vs regex classifier comparison
