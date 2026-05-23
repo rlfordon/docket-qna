@@ -37,6 +37,8 @@ RAG pipeline: **Fetch → Classify → Index → Query**
 - Streamlit `$` signs must be escaped (`\$`) to prevent LaTeX rendering — use `_escape_dollars()` for any user-facing text that may contain dollar amounts
 - `st.chat_input` must be in the main body (not inside `st.tabs` or containers) to pin to the bottom of the page
 - PACER docket purchase date params are `de_date_start`/`de_date_end` (not `date_start`/`date_end`)
+- ECF citation links use CourtListener's `entry_gte`/`entry_lte` filters to ensure the anchor resolves (no `show_all` param exists; docket pages paginate at 200 entries)
+- Demo mode (`DEMO_MODE=true`) shows purchase suggestions with a caveat instead of hiding them — LLM gets purchase instructions even without PACER creds
 
 ## Environment Variables
 

@@ -25,8 +25,16 @@ Findings from UX research (March 2026). Prioritized by impact.
 - [ ] Work around `st.expander` disappearing inside `st.chat_message` on new submissions (known Streamlit bug) — show sources inline for latest message
 - [ ] Reduce excessive `st.rerun()` calls that cause flickering
 
-### Interactive Demo Mode
-Playable demo with preloaded cases and a bundled API key so visitors can try querying without setup. Cases ship pre-indexed with full document text. PACER purchase buttons show a friendly "this feature isn't available in the demo" message instead of hitting PACER. Goal: let people experience the Q&A flow end-to-end without needing their own API keys or CourtListener accounts.
+### ~~Interactive Demo Mode~~ ✓ Done
+Deployed at https://bankruptcy-docket-qanda.onrender.com. Two preloaded cases with pre-built indexes, onboarding guide with example questions, and purchase suggestions shown with a "not available in demo" caveat. Runs on Render (Starter plan) with OpenAI embeddings and Claude Haiku.
+
+### Code Review & Cleanup
+The codebase has grown organically through rapid feature iteration — demo mode, PACER purchases, purchase suggestions, ECF linking, query routing, UI layout rework. Time for a holistic review to catch:
+- Dead code or unused imports accumulated across refactors
+- Inconsistent patterns (e.g., mixed approaches to session state, error handling)
+- Overly long functions that should be decomposed (especially `main()` in `app.py`)
+- Duplicated logic between chat history replay and new message handling
+- Any spaghetti coupling between modules that should have cleaner interfaces
 
 ### Question Classifier Improvements
 The regex-based classifier handles 84 test cases but has known limitations with novel phrasings. Options being evaluated:
