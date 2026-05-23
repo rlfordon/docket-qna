@@ -136,3 +136,42 @@ def test_index_single_document_tags_chunks(patched_chroma, folio_catalog_dir, mo
     assert all("concepts" in m for m in metadatas)
     # The [0,1,0,0] embedding matches adequate_protection in the fixture
     assert any("adequate_protection" in m["concepts"] for m in metadatas)
+
+
+def test_reindex_descriptions_tags_chunks(patched_chroma, folio_catalog_dir, monkeypatch):
+    """Regression test for Fix #1: reindex_descriptions() must tag chunks too.
+
+    Without _attach_folio_tags in this path, re-indexing descriptions strips
+    concept tags from description chunks while document chunks keep theirs,
+    producing an inconsistent index that breaks query-side re-ranking.
+    """
+    import config
+    monkeypatch.setattr(config, "FOLIO_ENABLED", True)
+    monkeypatch.setattr(config, "FOLIO_CATALOG_DIR", folio_catalog_dir)
+    monkeypatch.setattr(config, "FOLIO_TOP_N_CONCEPTS", 2)
+    monkeypatch.setattr(config, "FOLIO_MIN_SIMILARITY", 0.4)
+
+    import indexer
+    monkeypatch.setattr(
+        indexer, "embed_texts",
+        lambda texts, is_query=False: [[0.0, 0.0, 1.0, 0.0] for _ in texts],
+    )
+
+    patched_chroma.add.reset_mock()
+    # Pretend there's an existing collection with no description chunks
+    patched_chroma.get.return_value = {"ids": []}
+
+    from indexer import CaseIndex
+    case = _make_case()
+    idx = CaseIndex(case.docket_id)
+    idx.client.get_collection = MagicMock(return_value=patched_chroma)
+
+    idx.reindex_descriptions(case)
+
+    assert patched_chroma.add.called, "Expected collection.add to be called"
+    metadatas = patched_chroma.add.call_args.kwargs["metadatas"]
+    assert all("concepts" in m for m in metadatas), (
+        "reindex_descriptions must tag chunks with FOLIO concepts"
+    )
+    # The [0,0,1,0] embedding matches proof_of_claim in the fixture
+    assert any("proof_of_claim" in m["concepts"] for m in metadatas)

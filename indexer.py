@@ -419,6 +419,8 @@ class CaseIndex:
         logger.info(f"Re-indexing {entry_count} docket entry descriptions...")
         embeddings = embed_texts(all_chunks, is_query=False)
 
+        _attach_folio_tags(all_metadatas, embeddings)
+
         batch_size = 5000
         for i in range(0, len(all_chunks), batch_size):
             end = min(i + batch_size, len(all_chunks))
