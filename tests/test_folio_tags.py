@@ -45,10 +45,10 @@ def test_load_catalog_missing_files_returns_empty(tmp_path):
 
 def test_load_catalog_row_order_matches_concepts(folio_catalog_dir):
     concepts, embeddings = load_catalog(folio_catalog_dir)
-    # Row 0 should be the automatic_stay vector [1, 0, 0, 0]
-    assert embeddings[0, 0] == 1.0
-    assert embeddings[1, 1] == 1.0
-    assert embeddings[2, 2] == 1.0
+    # Each row should be the exact one-hot vector for its concept
+    assert np.allclose(embeddings[0], [1.0, 0.0, 0.0, 0.0])  # automatic_stay
+    assert np.allclose(embeddings[1], [0.0, 1.0, 0.0, 0.0])  # adequate_protection
+    assert np.allclose(embeddings[2], [0.0, 0.0, 1.0, 0.0])  # proof_of_claim
 
 
 from folio_tags import tag_embedding
