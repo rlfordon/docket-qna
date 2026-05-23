@@ -86,6 +86,15 @@ def test_tag_embedding_empty_catalog_returns_empty():
     assert tags == []
 
 
+def test_tag_embedding_dim_mismatch_returns_empty(folio_catalog_dir):
+    """Fix #2: A chunk embedding with the wrong dimension must not crash."""
+    concepts, embeddings = load_catalog(folio_catalog_dir)  # 4-d fixture
+    vec = np.zeros(8, dtype=np.float32)  # 8-d — wrong shape for the catalog
+    vec[0] = 1.0
+    tags = tag_embedding(vec, concepts, embeddings, top_n=5, min_sim=0.0)
+    assert tags == []
+
+
 from unittest.mock import patch
 from folio_tags import tag_text
 

@@ -116,6 +116,17 @@ def tag_embedding(
     if not concepts or embeddings.size == 0:
         return []
 
+    # Guard against embedding-dim mismatch (e.g. catalog built with one
+    # embedding provider, queries embedded with another). Log and no-op
+    # rather than crashing the caller.
+    if vec.shape[-1] != embeddings.shape[1]:
+        logger.error(
+            f"FOLIO embedding-dim mismatch: query vec is {vec.shape[-1]}-d "
+            f"but catalog is {embeddings.shape[1]}-d. Rebuild catalog with "
+            f"scripts/fetch_folio.py to match your current EMBEDDING_PROVIDER."
+        )
+        return []
+
     sims = embeddings @ vec  # (N_concepts,)
     order = np.argsort(-sims)[:top_n]
     return [concepts[int(j)].short_name for j in order if sims[int(j)] >= min_sim]

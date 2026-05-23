@@ -45,6 +45,23 @@ def _attach_folio_tags(metadatas: list[dict], embeddings: list[list[float]]) -> 
         return
 
     chunk_arr = np.array(embeddings, dtype=np.float32)
+
+    # Guard against embedding-dim mismatch (e.g. catalog built with one
+    # embedding provider, chunks embedded with another). Log and no-op
+    # rather than crashing index_case() with a matmul ValueError.
+    if chunk_arr.ndim != 2 or chunk_arr.shape[1] != concept_embs.shape[1]:
+        logger.error(
+            f"FOLIO embedding-dim mismatch: chunks are "
+            f"{chunk_arr.shape[1] if chunk_arr.ndim == 2 else 'unknown'}-d "
+            f"but catalog is {concept_embs.shape[1]}-d. Rebuild catalog with "
+            f"scripts/fetch_folio.py to match your current EMBEDDING_PROVIDER. "
+            f"Falling back to empty concept tags."
+        )
+        for m in metadatas:
+            m.setdefault("concepts", "")
+            m.setdefault("concepts_score", 0.0)
+        return
+
     sims = chunk_arr @ concept_embs.T  # (N_chunks, N_concepts)
 
     for i, m in enumerate(metadatas):

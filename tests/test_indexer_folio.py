@@ -175,3 +175,32 @@ def test_reindex_descriptions_tags_chunks(patched_chroma, folio_catalog_dir, mon
     )
     # The [0,0,1,0] embedding matches proof_of_claim in the fixture
     assert any("proof_of_claim" in m["concepts"] for m in metadatas)
+
+
+def test_index_case_survives_embedding_dim_mismatch(patched_chroma, folio_catalog_dir, monkeypatch):
+    """Fix #2: If chunk embedding width != catalog width, log-and-skip
+    instead of crashing the whole index_case() with a matmul ValueError.
+    """
+    import config
+    monkeypatch.setattr(config, "FOLIO_ENABLED", True)
+    monkeypatch.setattr(config, "FOLIO_CATALOG_DIR", folio_catalog_dir)
+
+    import indexer
+    # Catalog is 4-d; emit 8-d chunk embeddings to trigger a mismatch
+    monkeypatch.setattr(
+        indexer, "embed_texts",
+        lambda texts, is_query=False: [[0.1] * 8 for _ in texts],
+    )
+
+    patched_chroma.add.reset_mock()
+    from indexer import CaseIndex
+    case = _make_case()
+    idx = CaseIndex(case.docket_id)
+
+    # Should not raise
+    idx.index_case(case)
+
+    # Chunks should still be added (with empty-default concepts)
+    assert patched_chroma.add.called
+    metadatas = patched_chroma.add.call_args_list[0].kwargs["metadatas"]
+    assert all(m.get("concepts", "") == "" for m in metadatas)
