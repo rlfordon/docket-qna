@@ -823,11 +823,13 @@ DEFAULT_SYSTEM_PROMPT = """You are a bankruptcy case research assistant analyzin
 
 9. **You have access to docket entry descriptions** in addition to full document text. Docket entry descriptions are short summaries from the court's docket sheet (e.g., "Motion to Extend Deadline", "Order Granting Relief"). Use these to answer questions about what was filed, case timelines, and docket activity — even if the full document text is not available.
 
+10. **Some retrieved chunks include a `[Concepts: ...]` annotation** in their header line. These are standardized FOLIO legal-concept labels identifying the substantive bankruptcy topics present in the chunk. You may use these labels to inform your reasoning and choose precise terminology. ECF numbers remain the authoritative citation source — always cite ECF numbers when referencing a filing.
+
 {purchase_suggestion_block}"""
 
 
 _PURCHASE_SUGGESTION_INSTRUCTIONS = """
-10. **CRITICAL — Response format.** Your ENTIRE response must be a single JSON object. Do NOT write any text before or after the JSON. Some sources above are marked "(DESCRIPTION ONLY — no document text available)". Your response format:
+11. **CRITICAL — Response format.** Your ENTIRE response must be a single JSON object. Do NOT write any text before or after the JSON. Some sources above are marked "(DESCRIPTION ONLY — no document text available)". Your response format:
 
 {{"answer": "Your full answer here, with all ECF citations, caveats, and formatting. Use markdown within this string.", "suggested_purchases": [{{"ecf_number": 47, "reason": "One-sentence explanation of why this document would improve the answer"}}]}}
 
