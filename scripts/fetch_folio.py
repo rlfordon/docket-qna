@@ -33,19 +33,25 @@ logger = logging.getLogger(__name__)
 
 API_BASE = "https://folio.openlegalstandard.org"
 MAX_DEPTH = 6
-PAGE_SIZE = 100
 RETRY_DELAYS = [1, 3, 9]  # seconds
 
 
-def _api_get(path: str, params: dict | None = None) -> dict | list:
-    """GET with simple retry/backoff."""
-    url = f"{API_BASE}{path}"
+def _normalize_iri(iri: str) -> str:
+    """Return iri as a full URL. The root IRI in config is a slug; the
+    API returns full URLs in parent_class_of / sub_class_of lists."""
+    if iri.startswith("http"):
+        return iri
+    return f"{API_BASE}/{iri}"
+
+
+def _api_get(url: str) -> dict:
+    """GET a full URL with simple retry/backoff."""
     last_err: Exception | None = None
     for delay in [0] + RETRY_DELAYS:
         if delay:
             time.sleep(delay)
         try:
-            resp = requests.get(url, params=params, timeout=30)
+            resp = requests.get(url, timeout=30)
             resp.raise_for_status()
             return resp.json()
         except (requests.RequestException, ValueError) as e:
@@ -55,45 +61,34 @@ def _api_get(path: str, params: dict | None = None) -> dict | list:
 
 
 def _fetch_node(iri: str) -> dict:
-    """Fetch a single concept node by IRI."""
-    return _api_get(f"/{iri}")  # type: ignore[return-value]
-
-
-def _fetch_children(parent_iri: str) -> list[dict]:
-    """Fetch direct children of a concept (all pages)."""
-    out: list[dict] = []
-    offset = 0
-    while True:
-        page = _api_get(
-            "/search/query",
-            params={"parent_iri": parent_iri, "limit": PAGE_SIZE, "offset": offset},
-        )
-        # The API may return either a bare list or a dict with results — handle both
-        if isinstance(page, dict):
-            results = page.get("results") or page.get("items") or []
-        else:
-            results = page
-        if not results:
-            break
-        out.extend(results)
-        if len(results) < PAGE_SIZE:
-            break
-        offset += PAGE_SIZE
-    return out
+    """Fetch a single concept node by (possibly bare) IRI."""
+    return _api_get(_normalize_iri(iri))
 
 
 def _normalize(node: dict, depth: int) -> Concept:
-    """Convert an API node payload into a Concept dataclass."""
-    label = node.get("label") or node.get("prefLabel") or ""
+    """Convert an API node payload into a Concept dataclass.
+
+    The FOLIO API uses these field names:
+      iri                 — full URL identifier
+      label               — display name
+      preferred_label     — sometimes set (often null)
+      alternative_labels  — synonyms
+      definition          — text
+      parent_class_of     — list of full-URL IRIs (this node's children)
+      sub_class_of        — list of full-URL IRIs (this node's parents)
+    """
+    label = node.get("label") or node.get("preferred_label") or ""
+    parents = list(node.get("sub_class_of") or [])
+    children = list(node.get("parent_class_of") or [])
     return Concept(
-        iri=node["iri"] if "iri" in node else node.get("id", ""),
+        iri=node.get("iri") or "",
         short_name=slugify(label),
         label=label,
-        alt_labels=list(node.get("altLabels") or node.get("alt_labels") or []),
+        alt_labels=list(node.get("alternative_labels") or []),
         definition=node.get("definition") or "",
         embed_text="",  # filled below
-        parent_iri=node.get("parent_iri") or "",
-        children_iris=list(node.get("children_iris") or []),
+        parent_iri=parents[0] if parents else "",
+        children_iris=children,
         depth=depth,
     )
 
@@ -107,9 +102,13 @@ def _build_embed_text(c: Concept) -> str:
 
 
 def traverse(root_iri: str) -> list[Concept]:
-    """BFS from root_iri down to MAX_DEPTH, deduplicating by IRI."""
+    """BFS from root_iri down to MAX_DEPTH, deduplicating by IRI.
+
+    Children come inline in each node's `parent_class_of` field, so no
+    separate "list children" API call is needed.
+    """
     seen: dict[str, Concept] = {}
-    queue: list[tuple[str, int]] = [(root_iri, 0)]
+    queue: list[tuple[str, int]] = [(_normalize_iri(root_iri), 0)]
 
     while queue:
         iri, depth = queue.pop(0)
@@ -126,9 +125,7 @@ def traverse(root_iri: str) -> list[Concept]:
         logger.info(f"[d={depth}] {c.label} ({c.short_name})")
 
         if depth < MAX_DEPTH:
-            children = _fetch_children(iri)
-            for child in children:
-                child_iri = child.get("iri") or child.get("id")
+            for child_iri in c.children_iris:
                 if child_iri and child_iri not in seen:
                     queue.append((child_iri, depth + 1))
 
