@@ -95,6 +95,57 @@ def test_tag_embedding_dim_mismatch_returns_empty(folio_catalog_dir):
     assert tags == []
 
 
+def test_tag_embedding_threshold_is_cosine_under_scaling():
+    """Fix #3: With FLP embeddings unnormalized, a 10x-magnitude query
+    against a unit catalog row yields raw dot product 10.0 — which
+    trivially passes any threshold below 1.0. Real cosine should be 1.0
+    regardless of magnitude, so the threshold means what it claims.
+    """
+    from folio_tags import Concept, tag_embedding
+    concepts = [Concept(iri="X", short_name="x", label="X")]
+    catalog = np.array([[1.0, 0.0]], dtype=np.float32)  # unit catalog row
+    # Query is collinear with magnitude 10. True cosine = 1.0.
+    vec = np.array([10.0, 0.0], dtype=np.float32)
+    tags = tag_embedding(vec, concepts, catalog, top_n=1, min_sim=1.0)
+    # Without normalization, raw dot is 10.0; comparing to threshold 1.0
+    # accidentally still passes. The real test: ranking should be cosine.
+    # Use a tighter threshold above raw cosine to confirm we're really
+    # computing cosine, not dot product:
+    tags2 = tag_embedding(vec, concepts, catalog, top_n=1, min_sim=1.01)
+    assert tags == ["x"]
+    assert tags2 == []  # true cosine is exactly 1.0, can't exceed 1.01
+
+
+def test_tag_embedding_ranks_by_cosine_not_dot_product():
+    """Fix #3: Two catalog rows where unnormalized dot product TIES but
+    cosine has a clear winner. Without normalization, ranking depends on
+    argsort tie-breaking (insertion order). With proper cosine, the
+    smaller-magnitude row wins because its direction better matches.
+    """
+    from folio_tags import Concept, tag_embedding
+    concepts = [
+        Concept(iri="A", short_name="big_off_axis", label="A"),
+        Concept(iri="B", short_name="small_on_axis", label="B"),
+    ]
+    # Row 0: magnitude ~10.05, mostly off-axis — query alignment is weak
+    # Row 1: magnitude ~1.12, mostly on-axis — query alignment is strong
+    # Both produce raw dot product 1.0 with query [0,1,0,0] → unnormalized
+    # ranking is a tie; normalized ranking puts small_on_axis first.
+    catalog = np.array(
+        [
+            [10.0, 1.0, 0.0, 0.0],
+            [0.5, 1.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    vec = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+    tags = tag_embedding(vec, concepts, catalog, top_n=1, min_sim=0.5)
+    assert tags == ["small_on_axis"], (
+        "Without cosine normalization, the large-magnitude off-axis row "
+        "ties on raw dot product. Cosine should pick the better-aligned row."
+    )
+
+
 from unittest.mock import patch
 from folio_tags import tag_text
 

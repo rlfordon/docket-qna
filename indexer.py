@@ -62,7 +62,13 @@ def _attach_folio_tags(metadatas: list[dict], embeddings: list[list[float]]) -> 
             m.setdefault("concepts_score", 0.0)
         return
 
-    sims = chunk_arr @ concept_embs.T  # (N_chunks, N_concepts)
+    # L2-normalize both sides so the matmul yields true cosine similarity.
+    # FLP's model.encode() returns un-normalized vectors by default, so
+    # raw dot product would conflate magnitude with semantic similarity
+    # and FOLIO_MIN_SIMILARITY would not behave as a cosine threshold.
+    chunk_norm = folio_tags._l2_normalize_rows(chunk_arr)
+    concept_norm = folio_tags._l2_normalize_rows(concept_embs)
+    sims = chunk_norm @ concept_norm.T  # (N_chunks, N_concepts), cosine
 
     for i, m in enumerate(metadatas):
         order = np.argsort(-sims[i])[: config.FOLIO_TOP_N_CONCEPTS]

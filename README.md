@@ -101,6 +101,8 @@ This writes `data/folio/concepts.json` and `data/folio/concepts.npy`. Re-run to 
 
 If the catalog is missing, tagging is automatically a no-op and the app still works. To disable explicitly, set `FOLIO_ENABLED=false` in your `.env`.
 
+**Rebuild the catalog if you change `EMBEDDING_PROVIDER`.** The catalog stores concept embeddings produced by whichever provider was active when `fetch_folio.py` ran. If chunk embeddings end up in a different dimensional space (e.g. FLP at 768-d, OpenAI at 1536-d), tagging logs an error and falls back to a no-op until you re-run `scripts/fetch_folio.py`.
+
 ### Run
 ```bash
 streamlit run app.py

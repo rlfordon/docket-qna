@@ -100,6 +100,17 @@ def get_catalog(catalog_dir: Path | None = None) -> tuple[list[Concept], np.ndar
     return _cached_catalog(str(path))
 
 
+def _l2_normalize_rows(arr: np.ndarray) -> np.ndarray:
+    """Return a copy of arr with each row L2-normalized to unit length.
+
+    Rows with zero magnitude are left as zero (and contribute zero
+    similarity to anything), avoiding a divide-by-zero.
+    """
+    norms = np.linalg.norm(arr, axis=-1, keepdims=True)
+    norms = np.where(norms == 0, 1.0, norms)
+    return arr / norms
+
+
 def tag_embedding(
     vec: np.ndarray,
     concepts: list[Concept],
@@ -109,9 +120,9 @@ def tag_embedding(
 ) -> list[str]:
     """Return short_names of the top-N concepts with cosine similarity >= min_sim.
 
-    Assumes `vec` and rows of `embeddings` are L2-normalized (FLP and our
-    fixture vectors satisfy this). If they aren't, this still produces a
-    sensible ranking, just not strictly cosine.
+    Vectors are L2-normalized inside this function so the threshold and
+    ranking are true cosine, regardless of the caller's magnitudes.
+    (FLP's `model.encode` returns un-normalized vectors by default.)
     """
     if not concepts or embeddings.size == 0:
         return []
@@ -127,7 +138,10 @@ def tag_embedding(
         )
         return []
 
-    sims = embeddings @ vec  # (N_concepts,)
+    # Normalize so similarity is cosine, not raw dot product
+    n_vec = vec / (np.linalg.norm(vec) or 1.0)
+    n_embs = _l2_normalize_rows(embeddings)
+    sims = n_embs @ n_vec  # (N_concepts,)
     order = np.argsort(-sims)[:top_n]
     return [concepts[int(j)].short_name for j in order if sims[int(j)] >= min_sim]
 
