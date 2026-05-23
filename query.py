@@ -11,11 +11,45 @@ from datetime import datetime, timedelta
 from typing import Callable, Optional
 
 import config
+import folio_tags
 from classifier import DocType, classify_document
 from indexer import CaseIndex
 from courtlistener import BankruptcyCase
 
 logger = logging.getLogger(__name__)
+
+
+def rerank_by_concepts(
+    chunks: list[dict],
+    query_tags: list[str],
+    alpha: float | None = None,
+    k: int | None = None,
+) -> list[dict]:
+    """Re-rank ChromaDB results by combining vector similarity with FOLIO
+    concept overlap.
+
+    Each chunk's `combined` score is:
+        (1 - alpha) * (1 - distance) + alpha * (|query_tags ∩ chunk_tags| / |query_tags|)
+
+    Returns the top-k chunks by combined score. If query_tags is empty,
+    returns chunks unchanged (truncated to k).
+    """
+    if alpha is None:
+        alpha = config.FOLIO_RERANK_ALPHA
+    if k is None:
+        k = config.RETRIEVAL_TOP_K
+
+    if not query_tags:
+        return chunks[:k]
+
+    qset = set(query_tags)
+    for c in chunks:
+        c_tags = set((c.get("metadata") or {}).get("concepts", "").split("|")) - {""}
+        overlap = len(qset & c_tags) / len(qset) if qset else 0.0
+        vector_score = 1.0 - float(c.get("distance", 0.0))
+        c["combined"] = (1.0 - alpha) * vector_score + alpha * overlap
+
+    return sorted(chunks, key=lambda c: -c["combined"])[:k]
 
 
 # ---------------------------------------------------------------------------
@@ -413,6 +447,31 @@ def load_system_prompt(case: BankruptcyCase) -> str:
         return result
 
 
+def format_chunk_for_llm(chunk: dict, source_index: int) -> str:
+    """Render one retrieved chunk as a labeled block for the LLM context.
+
+    Preserves the existing header format and appends `[Concepts: ...]` when
+    the chunk has FOLIO concept tags. Empty tags produce no annotation.
+    """
+    meta = chunk["metadata"]
+    ecf = meta.get("ecf_number", "Unknown")
+    desc = meta.get("description", "")[:200]
+    date = meta.get("date_filed", "Unknown date")
+    doc_type = meta.get("doc_type", "other")
+    chunk_info = f"(chunk {meta.get('chunk_index', 0) + 1}/{meta.get('total_chunks', 1)})"
+
+    source = meta.get("source", "document")
+    desc_tag = " (DESCRIPTION ONLY — no document text available)" if source == "docket_entry" else ""
+
+    header = f"[Source {source_index}: {ecf} | {doc_type} | {date} | {desc}{desc_tag} {chunk_info}]"
+
+    concepts_annot = folio_tags.format_for_llm(meta.get("concepts", ""))
+    if concepts_annot:
+        header = f"{header} {concepts_annot}"
+
+    return f"{header}\n{chunk['text']}"
+
+
 def format_context(chunks: list[dict]) -> str:
     """Format retrieved chunks into context for the LLM.
 
@@ -429,18 +488,8 @@ def format_context(chunks: list[dict]) -> str:
     seen_entries = set()
 
     for i, chunk in enumerate(chunks, 1):
+        context_parts.append(format_chunk_for_llm(chunk, source_index=i))
         meta = chunk["metadata"]
-        ecf = meta.get("ecf_number", "Unknown")
-        desc = meta.get("description", "")[:200]
-        date = meta.get("date_filed", "Unknown date")
-        doc_type = meta.get("doc_type", "other")
-        chunk_info = f"(chunk {meta.get('chunk_index', 0)+1}/{meta.get('total_chunks', 1)})"
-
-        source = meta.get("source", "document")
-        desc_tag = " (DESCRIPTION ONLY — no document text available)" if source == "docket_entry" else ""
-        header = f"[Source {i}: {ecf} | {doc_type} | {date} | {desc}{desc_tag} {chunk_info}]"
-        context_parts.append(f"{header}\n{chunk['text']}")
-
         seen_entries.add(meta.get("entry_number", 0))
 
     return "\n\n---\n\n".join(context_parts)
@@ -477,6 +526,9 @@ def query_case(
     _progress = progress or (lambda msg: None)
 
     _progress("Classifying question...")
+    query_tags = folio_tags.tag_text(question) if config.FOLIO_ENABLED else []
+    if query_tags:
+        logger.info(f"Query tagged with FOLIO concepts: {query_tags}")
     intent = classify_question(question, case)
     logger.info(f"Question classified as '{intent.category}' (doc_type={intent.doc_type}, date_range={intent.date_range})")
 
@@ -530,7 +582,7 @@ def query_case(
 
     if descriptions_only:
         # Skip document chunk retrieval — use description hits directly
-        all_chunks = desc_hits
+        all_chunks = rerank_by_concepts(desc_hits, query_tags, k=top_k)
     else:
         # Collect entry IDs from the description hits for stage 2
         hit_entry_ids = list({
@@ -544,7 +596,7 @@ def query_case(
         if hit_entry_ids:
             doc_chunks = index.query_documents(
                 question=question,
-                top_k=top_k,
+                top_k=top_k * 2 if query_tags else top_k,
                 doc_type_filter=effective_type_filter,
                 entry_ids=hit_entry_ids,
             )
@@ -557,7 +609,7 @@ def query_case(
             remaining = top_k - len(doc_chunks)
             fallback_chunks = index.query_documents(
                 question=question,
-                top_k=remaining,
+                top_k=remaining * 2 if query_tags else remaining,
                 doc_type_filter=effective_type_filter,
             )
             # Deduplicate by chunk text
@@ -578,6 +630,7 @@ def query_case(
 
         # Put doc chunks first (richer content), then unique description hits
         all_chunks = doc_chunks + unique_desc_hits
+        all_chunks = rerank_by_concepts(all_chunks, query_tags, k=top_k)
 
     if not all_chunks:
         return {
@@ -770,11 +823,13 @@ DEFAULT_SYSTEM_PROMPT = """You are a bankruptcy case research assistant analyzin
 
 9. **You have access to docket entry descriptions** in addition to full document text. Docket entry descriptions are short summaries from the court's docket sheet (e.g., "Motion to Extend Deadline", "Order Granting Relief"). Use these to answer questions about what was filed, case timelines, and docket activity — even if the full document text is not available.
 
+10. **Some retrieved chunks include a `[Concepts: ...]` annotation** in their header line. These are standardized FOLIO legal-concept labels identifying the substantive bankruptcy topics present in the chunk. You may use these labels to inform your reasoning and choose precise terminology. ECF numbers remain the authoritative citation source — always cite ECF numbers when referencing a filing.
+
 {purchase_suggestion_block}"""
 
 
 _PURCHASE_SUGGESTION_INSTRUCTIONS = """
-10. **CRITICAL — Response format.** Your ENTIRE response must be a single JSON object. Do NOT write any text before or after the JSON. Some sources above are marked "(DESCRIPTION ONLY — no document text available)". Your response format:
+11. **CRITICAL — Response format.** Your ENTIRE response must be a single JSON object. Do NOT write any text before or after the JSON. Some sources above are marked "(DESCRIPTION ONLY — no document text available)". Your response format:
 
 {{"answer": "Your full answer here, with all ECF citations, caveats, and formatting. Use markdown within this string.", "suggested_purchases": [{{"ecf_number": 47, "reason": "One-sentence explanation of why this document would improve the answer"}}]}}
 

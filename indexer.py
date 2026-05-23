@@ -18,6 +18,66 @@ from courtlistener import BankruptcyCase, DocketEntry, RecapDocument
 
 logger = logging.getLogger(__name__)
 
+
+def _attach_folio_tags(metadatas: list[dict], embeddings: list[list[float]]) -> None:
+    """Tag each chunk's metadata with FOLIO concepts based on its embedding.
+
+    Mutates `metadatas` in place. Writes the `concepts` (pipe-delimited
+    short names) and `concepts_score` (float, top similarity) fields. If
+    FOLIO is disabled or the catalog is missing, writes empty defaults so
+    downstream code can treat the field as always-present.
+    """
+    import numpy as np
+
+    import folio_tags
+
+    if not config.FOLIO_ENABLED:
+        for m in metadatas:
+            m.setdefault("concepts", "")
+            m.setdefault("concepts_score", 0.0)
+        return
+
+    concepts, concept_embs = folio_tags.get_catalog()
+    if not concepts:
+        for m in metadatas:
+            m.setdefault("concepts", "")
+            m.setdefault("concepts_score", 0.0)
+        return
+
+    chunk_arr = np.array(embeddings, dtype=np.float32)
+
+    # Guard against embedding-dim mismatch (e.g. catalog built with one
+    # embedding provider, chunks embedded with another). Log and no-op
+    # rather than crashing index_case() with a matmul ValueError.
+    if chunk_arr.ndim != 2 or chunk_arr.shape[1] != concept_embs.shape[1]:
+        logger.error(
+            f"FOLIO embedding-dim mismatch: chunks are "
+            f"{chunk_arr.shape[1] if chunk_arr.ndim == 2 else 'unknown'}-d "
+            f"but catalog is {concept_embs.shape[1]}-d. Rebuild catalog with "
+            f"scripts/fetch_folio.py to match your current EMBEDDING_PROVIDER. "
+            f"Falling back to empty concept tags."
+        )
+        for m in metadatas:
+            m.setdefault("concepts", "")
+            m.setdefault("concepts_score", 0.0)
+        return
+
+    # L2-normalize both sides so the matmul yields true cosine similarity.
+    # FLP's model.encode() returns un-normalized vectors by default, so
+    # raw dot product would conflate magnitude with semantic similarity
+    # and FOLIO_MIN_SIMILARITY would not behave as a cosine threshold.
+    chunk_norm = folio_tags._l2_normalize_rows(chunk_arr)
+    concept_norm = folio_tags._l2_normalize_rows(concept_embs)
+    sims = chunk_norm @ concept_norm.T  # (N_chunks, N_concepts), cosine
+
+    for i, m in enumerate(metadatas):
+        order = np.argsort(-sims[i])[: config.FOLIO_TOP_N_CONCEPTS]
+        keep = [int(j) for j in order if sims[i, int(j)] >= config.FOLIO_MIN_SIMILARITY]
+        m["concepts"] = "|".join(concepts[j].short_name for j in keep)
+        m["concepts_score"] = (
+            round(float(sims[i, keep[0]]), 3) if keep else 0.0
+        )
+
 # Lazy-loaded embedding model
 _flp_model = None
 
@@ -232,6 +292,11 @@ class CaseIndex:
         # Embed in batches
         embeddings = embed_texts(all_chunks, is_query=False)
 
+        # FOLIO concept tagging — adds `concepts` (pipe-delimited short names)
+        # and `concepts_score` (top match similarity) to each chunk's metadata.
+        # No-op when FOLIO_ENABLED=false or catalog is missing.
+        _attach_folio_tags(all_metadatas, embeddings)
+
         # Add to ChromaDB in batches (max 41666 per call)
         batch_size = 5000
         for i in range(0, len(all_chunks), batch_size):
@@ -305,6 +370,8 @@ class CaseIndex:
         logger.info(f"Indexing {len(all_chunks)} chunks from document {doc.id}...")
         embeddings = embed_texts(all_chunks, is_query=False)
 
+        _attach_folio_tags(all_metadatas, embeddings)
+
         collection.add(
             ids=all_ids,
             embeddings=embeddings,
@@ -374,6 +441,8 @@ class CaseIndex:
 
         logger.info(f"Re-indexing {entry_count} docket entry descriptions...")
         embeddings = embed_texts(all_chunks, is_query=False)
+
+        _attach_folio_tags(all_metadatas, embeddings)
 
         batch_size = 5000
         for i in range(0, len(all_chunks), batch_size):

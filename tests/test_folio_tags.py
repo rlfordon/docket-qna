@@ -1,0 +1,234 @@
+"""Tests for folio_tags module."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from folio_tags import slugify
+
+
+def test_slugify_strips_practice_suffix():
+    assert slugify("Relief from Stay Practice") == "relief_from_stay"
+
+
+def test_slugify_handles_punctuation():
+    assert slugify("Fee & Employment Practice") == "fee_employment"
+
+
+def test_slugify_lowercases_and_underscores():
+    assert slugify("Adequate Protection") == "adequate_protection"
+
+
+def test_slugify_collapses_whitespace():
+    assert slugify("Chapter 11   Bankruptcy  Plan") == "chapter_11_bankruptcy_plan"
+
+
+import numpy as np
+from folio_tags import load_catalog
+
+
+def test_load_catalog_returns_concepts_and_embeddings(folio_catalog_dir):
+    concepts, embeddings = load_catalog(folio_catalog_dir)
+    assert len(concepts) == 3
+    assert concepts[0].short_name == "automatic_stay"
+    assert concepts[1].short_name == "adequate_protection"
+    assert concepts[2].short_name == "proof_of_claim"
+    assert isinstance(embeddings, np.ndarray)
+    assert embeddings.shape == (3, 4)
+
+
+def test_load_catalog_missing_files_returns_empty(tmp_path):
+    concepts, embeddings = load_catalog(tmp_path)
+    assert concepts == []
+    assert embeddings.shape == (0,) or embeddings.size == 0
+
+
+def test_load_catalog_row_order_matches_concepts(folio_catalog_dir):
+    concepts, embeddings = load_catalog(folio_catalog_dir)
+    # Each row should be the exact one-hot vector for its concept
+    assert np.allclose(embeddings[0], [1.0, 0.0, 0.0, 0.0])  # automatic_stay
+    assert np.allclose(embeddings[1], [0.0, 1.0, 0.0, 0.0])  # adequate_protection
+    assert np.allclose(embeddings[2], [0.0, 0.0, 1.0, 0.0])  # proof_of_claim
+
+
+from folio_tags import tag_embedding
+
+
+def test_tag_embedding_returns_top_match(folio_catalog_dir):
+    concepts, embeddings = load_catalog(folio_catalog_dir)
+    # Query vector identical to automatic_stay row → top match
+    vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    tags = tag_embedding(vec, concepts, embeddings, top_n=1, min_sim=0.5)
+    assert tags == ["automatic_stay"]
+
+
+def test_tag_embedding_respects_top_n(folio_catalog_dir):
+    concepts, embeddings = load_catalog(folio_catalog_dir)
+    # Equal-weight blend across all three: similarity ~0.577 each
+    vec = np.array([1.0, 1.0, 1.0, 0.0], dtype=np.float32)
+    vec /= np.linalg.norm(vec)
+    tags = tag_embedding(vec, concepts, embeddings, top_n=2, min_sim=0.4)
+    assert len(tags) == 2
+    assert set(tags) <= {"automatic_stay", "adequate_protection", "proof_of_claim"}
+
+
+def test_tag_embedding_drops_below_threshold(folio_catalog_dir):
+    concepts, embeddings = load_catalog(folio_catalog_dir)
+    # Orthogonal vector → similarity 0 to all
+    vec = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+    tags = tag_embedding(vec, concepts, embeddings, top_n=5, min_sim=0.1)
+    assert tags == []
+
+
+def test_tag_embedding_empty_catalog_returns_empty():
+    vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    tags = tag_embedding(vec, [], np.empty((0, 0), dtype=np.float32), top_n=5, min_sim=0.0)
+    assert tags == []
+
+
+def test_tag_embedding_dim_mismatch_returns_empty(folio_catalog_dir):
+    """Fix #2: A chunk embedding with the wrong dimension must not crash."""
+    concepts, embeddings = load_catalog(folio_catalog_dir)  # 4-d fixture
+    vec = np.zeros(8, dtype=np.float32)  # 8-d — wrong shape for the catalog
+    vec[0] = 1.0
+    tags = tag_embedding(vec, concepts, embeddings, top_n=5, min_sim=0.0)
+    assert tags == []
+
+
+def test_tag_embedding_threshold_is_cosine_under_scaling():
+    """Fix #3: With FLP embeddings unnormalized, a 10x-magnitude query
+    against a unit catalog row yields raw dot product 10.0 — which
+    trivially passes any threshold below 1.0. Real cosine should be 1.0
+    regardless of magnitude, so the threshold means what it claims.
+    """
+    from folio_tags import Concept, tag_embedding
+    concepts = [Concept(iri="X", short_name="x", label="X")]
+    catalog = np.array([[1.0, 0.0]], dtype=np.float32)  # unit catalog row
+    # Query is collinear with magnitude 10. True cosine = 1.0.
+    vec = np.array([10.0, 0.0], dtype=np.float32)
+    tags = tag_embedding(vec, concepts, catalog, top_n=1, min_sim=1.0)
+    # Without normalization, raw dot is 10.0; comparing to threshold 1.0
+    # accidentally still passes. The real test: ranking should be cosine.
+    # Use a tighter threshold above raw cosine to confirm we're really
+    # computing cosine, not dot product:
+    tags2 = tag_embedding(vec, concepts, catalog, top_n=1, min_sim=1.01)
+    assert tags == ["x"]
+    assert tags2 == []  # true cosine is exactly 1.0, can't exceed 1.01
+
+
+def test_tag_embedding_ranks_by_cosine_not_dot_product():
+    """Fix #3: Two catalog rows where unnormalized dot product TIES but
+    cosine has a clear winner. Without normalization, ranking depends on
+    argsort tie-breaking (insertion order). With proper cosine, the
+    smaller-magnitude row wins because its direction better matches.
+    """
+    from folio_tags import Concept, tag_embedding
+    concepts = [
+        Concept(iri="A", short_name="big_off_axis", label="A"),
+        Concept(iri="B", short_name="small_on_axis", label="B"),
+    ]
+    # Row 0: magnitude ~10.05, mostly off-axis — query alignment is weak
+    # Row 1: magnitude ~1.12, mostly on-axis — query alignment is strong
+    # Both produce raw dot product 1.0 with query [0,1,0,0] → unnormalized
+    # ranking is a tie; normalized ranking puts small_on_axis first.
+    catalog = np.array(
+        [
+            [10.0, 1.0, 0.0, 0.0],
+            [0.5, 1.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    vec = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+    tags = tag_embedding(vec, concepts, catalog, top_n=1, min_sim=0.5)
+    assert tags == ["small_on_axis"], (
+        "Without cosine normalization, the large-magnitude off-axis row "
+        "ties on raw dot product. Cosine should pick the better-aligned row."
+    )
+
+
+from unittest.mock import patch
+from folio_tags import tag_text
+
+
+def test_tag_text_embeds_then_tags(folio_catalog_dir, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "FOLIO_CATALOG_DIR", folio_catalog_dir)
+    # Mock the FLP embedder to return the automatic_stay vector
+    fake_vec = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32)
+
+    with patch("folio_tags._embed_query", return_value=fake_vec):
+        tags = tag_text(
+            "did the debtor lift the stay?",
+            catalog_dir=folio_catalog_dir,
+            top_n=1,
+            min_sim=0.5,
+        )
+
+    assert tags == ["automatic_stay"]
+
+
+def test_tag_text_empty_string_returns_empty(folio_catalog_dir):
+    tags = tag_text("", catalog_dir=folio_catalog_dir, top_n=5, min_sim=0.0)
+    assert tags == []
+
+
+def test_tag_text_whitespace_returns_empty(folio_catalog_dir):
+    tags = tag_text("   \n\t  ", catalog_dir=folio_catalog_dir, top_n=5, min_sim=0.0)
+    assert tags == []
+
+
+from folio_tags import format_for_llm
+
+
+def test_format_for_llm_renders_concepts():
+    assert format_for_llm("automatic_stay|adequate_protection") == \
+        "[Concepts: automatic_stay, adequate_protection]"
+
+
+def test_format_for_llm_empty_returns_empty_string():
+    assert format_for_llm("") == ""
+
+
+def test_format_for_llm_single_concept():
+    assert format_for_llm("proof_of_claim") == "[Concepts: proof_of_claim]"
+
+
+def test_format_for_llm_strips_empty_segments():
+    # Edge case: a stray trailing pipe shouldn't produce an empty label
+    assert format_for_llm("automatic_stay|") == "[Concepts: automatic_stay]"
+
+
+def test_clear_cache_forces_disk_reread(tmp_path, folio_catalog_dir):
+    """Fix #4: After rebuilding the catalog on disk, clear_cache() must
+    cause the next get_catalog() to pick up the new contents.
+    """
+    import json
+    import shutil
+    from folio_tags import get_catalog, clear_cache
+
+    # Copy fixture to a writable tmp dir so we can mutate it
+    work = tmp_path / "folio"
+    shutil.copytree(folio_catalog_dir, work)
+
+    # First read populates the cache
+    concepts1, _ = get_catalog(work)
+    assert len(concepts1) == 3
+
+    # Overwrite concepts.json with a single-concept catalog
+    (work / "concepts.json").write_text(json.dumps([{
+        "iri": "ONE", "short_name": "only_one", "label": "Only One",
+        "alt_labels": [], "definition": "", "embed_text": "",
+        "parent_iri": "", "children_iris": [], "depth": 1,
+    }]))
+    # Rebuild matching npy: 1 row, 4-d (matches existing fixture width)
+    np.save(work / "concepts.npy", np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32))
+
+    # Without clear_cache, we'd still see the old 3-concept catalog
+    concepts_stale, _ = get_catalog(work)
+    assert len(concepts_stale) == 3, "Sanity check: cache should still hold old"
+
+    # After clear_cache, we read the new single-concept catalog
+    clear_cache()
+    concepts_fresh, _ = get_catalog(work)
+    assert len(concepts_fresh) == 1
+    assert concepts_fresh[0].short_name == "only_one"

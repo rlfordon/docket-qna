@@ -11,8 +11,9 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
-# Add project root to path & mock chromadb
+# Add project root AND tests dir to path & mock chromadb
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.modules.setdefault("chromadb", MagicMock())
 
 from courtlistener import BankruptcyCase, DocketEntry

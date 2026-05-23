@@ -58,6 +58,14 @@ DATA_DIR.mkdir(exist_ok=True)
 CHROMA_DIR.mkdir(exist_ok=True)
 CASES_DIR.mkdir(exist_ok=True)
 
+# FOLIO concept tagging
+FOLIO_ENABLED = os.getenv("FOLIO_ENABLED", "true").lower() == "true"
+FOLIO_CATALOG_DIR = DATA_DIR / "folio"
+FOLIO_TOP_N_CONCEPTS = int(os.getenv("FOLIO_TOP_N_CONCEPTS", "5"))
+FOLIO_MIN_SIMILARITY = float(os.getenv("FOLIO_MIN_SIMILARITY", "0.40"))
+FOLIO_RERANK_ALPHA = float(os.getenv("FOLIO_RERANK_ALPHA", "0.25"))
+FOLIO_BANKRUPTCY_ROOT_IRI = "R7LI3BONqNkXbKHKa0t3jyI"
+
 
 def validate_config():
     """Check that required configuration is present."""

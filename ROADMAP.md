@@ -50,6 +50,9 @@ Streamlit has been good for prototyping but is hitting its limits — no clipboa
 ### Claims Register Parsing
 Structured extraction from proofs of claim — pull creditor names, amounts, claim types, and status into a queryable format. Would enable questions like "Which creditors filed claims over $1 million?" with precise answers.
 
+### Hierarchical Chunking for Long Structured Filings
+Long bankruptcy filings (Plans of Reorganization, Disclosure Statements, lengthy opinions) have explicit hierarchical structure — articles, sections, definitions, exhibits — that the current flat 512-token chunker discards. A clause about "cramdown" deep in a Plan is meaningless without the definitions section it relies on. Build a section-tree for known long-form filing types, summarize each node, and let retrieval navigate the tree instead of relying on flat vector similarity. Most impactful for Plans, Disclosure Statements, and written opinions; default flat chunking remains fine for short filings.
+
 ### Timeline Generation
 Automatic case timeline from key docket events. Identify milestones (petition date, first day hearings, bar dates, plan filing, confirmation) and present as a visual timeline in the dashboard.
 
